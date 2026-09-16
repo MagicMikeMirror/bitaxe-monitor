@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.0.1
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.0.2
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -10,6 +10,9 @@ services:
       DB_PATH: /data/bitaxe.sqlite3
       POLL_SECONDS: ${POLL_SECONDS:-10}
       PORT: "8080"
+      PUBLIC_POOL_API_URL: ${PUBLIC_POOL_API_URL:-https://public-pool.io:40557/api}
+      BTC_PRICE_URL: ${BTC_PRICE_URL:-https://api.coinbase.com/v2/prices/BTC-EUR/spot}
+      MARKET_SECONDS: ${MARKET_SECONDS:-300}
     ports:
       - "${DASHBOARD_PORT:-8787}:8080"
     volumes:
@@ -41,12 +44,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.0.1"
+  version: "1.0.2"
   update_at: "2026-09-16"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Initial public release.
-    de_DE: Erste öffentliche Version.
+    en_US: Adds a privacy-safe block value and Public Pool overview, plus separate power and temperature chart scales.
+    de_DE: Ergänzt eine datenschutzfreundliche Blockwert- und Public-Pool-Übersicht sowie getrennte Skalen für Leistung und Temperatur.

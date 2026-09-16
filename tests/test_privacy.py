@@ -11,6 +11,10 @@ SPEC.loader.exec_module(APP)
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_block_subsidy_follows_halvings(self):
+        self.assertEqual(APP.block_subsidy(839999), 6.25)
+        self.assertEqual(APP.block_subsidy(840000), 3.125)
+
     def test_sensitive_api_fields_are_discarded(self):
         raw = {
             "power": 21.5,
