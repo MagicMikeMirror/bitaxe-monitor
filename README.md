@@ -11,6 +11,8 @@ events without Grafana, InfluxDB or additional containers.
 - 1-hour, 24-hour and 7-day charts
 - Offline, recovery, reboot, power, temperature, low-hashrate, rejected-share,
   fallback-pool, overheat and block-found events
+- Live BTC/EUR and block-subsidy value
+- Public Pool statistics for the configured miner and its workers
 - Responsive dark dashboard for TV, desktop and mobile
 - Single multi-architecture container with no Python dependencies
 
@@ -20,6 +22,11 @@ The AxeOS response is filtered through an explicit allow-list before it reaches
 SQLite, logs or the dashboard. The app never stores raw API responses, wallet
 addresses, pool URLs, pool users, pool passwords, Wi-Fi SSIDs, MAC addresses or
 device IP addresses.
+
+For the optional Public Pool statistics, the configured mining address is read
+from AxeOS and used only in memory for the pool request. It is never returned by
+the dashboard API, written to SQLite or included in logs. BTC/EUR is refreshed
+from Coinbase and the block subsidy is calculated from the current block height.
 
 ## ZimaOS installation
 
@@ -51,6 +58,9 @@ Health endpoint: `http://localhost:8787/healthz`
 | `POWER_HIGH_W` | `35` | High-power event threshold |
 | `TEMP_HIGH_C` | `75` | High-temperature event threshold |
 | `HASHRATE_LOW_GH` | `750` | Low-hashrate event threshold |
+| `PUBLIC_POOL_API_URL` | `https://public-pool.io:40557/api` | Public Pool API endpoint |
+| `BTC_PRICE_URL` | Coinbase BTC/EUR spot API | BTC/EUR price endpoint |
+| `MARKET_SECONDS` | `300` | Market and Public Pool refresh interval |
 
 ## Development
 

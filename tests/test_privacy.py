@@ -15,6 +15,11 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual(APP.block_subsidy(839999), 6.25)
         self.assertEqual(APP.block_subsidy(840000), 3.125)
 
+    def test_mining_address_is_transient_only(self):
+        raw = {"stratumUser": "bc1q-test-address.worker"}
+        self.assertEqual(APP.mining_address(raw), "bc1q-test-address")
+        self.assertNotIn("stratumUser", APP.clean(raw))
+
     def test_sensitive_api_fields_are_discarded(self):
         raw = {
             "power": 21.5,
