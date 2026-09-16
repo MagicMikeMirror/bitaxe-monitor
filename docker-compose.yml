@@ -1,0 +1,52 @@
+name: bitaxe-monitor
+
+services:
+  bitaxe-monitor:
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.0.0
+    container_name: bitaxe-monitor
+    restart: unless-stopped
+    environment:
+      BITAXE_API_URL: ${BITAXE_API_URL:-http://192.168.1.100/api/system/info}
+      DB_PATH: /data/bitaxe.sqlite3
+      POLL_SECONDS: ${POLL_SECONDS:-10}
+      PORT: "8080"
+    ports:
+      - "${DASHBOARD_PORT:-8787}:8080"
+    volumes:
+      - /DATA/AppData/bitaxe-monitor/data:/data
+    security_opt:
+      - no-new-privileges:true
+
+x-casaos:
+  id: io.github.magicmikemirror.bitaxe-monitor
+  main: bitaxe-monitor
+  index: /
+  port_map: "8787"
+  scheme: http
+  icon: icon.svg
+  title:
+    en_US: Bitaxe Monitor
+    de_DE: Bitaxe Monitor
+  tagline:
+    en_US: Private local monitoring for Bitaxe and AxeOS miners
+    de_DE: Privates lokales Monitoring für Bitaxe- und AxeOS-Miner
+  description:
+    en_US: Lightweight single-container Bitaxe dashboard with SQLite history, responsive charts, health status and event detection. It stores only an explicit allow-list of telemetry fields and never stores wallet, pool credentials or raw API responses.
+    de_DE: Schlankes Bitaxe-Dashboard als einzelner Container mit SQLite-Verlauf, responsiven Diagrammen, Health-Status und Ereigniserkennung. Es speichert ausschließlich eine feste Positivliste von Messwerten und niemals Wallet-, Pool-Zugangsdaten oder rohe API-Antworten.
+  tips:
+    before_install:
+      en_US: Set BITAXE_API_URL to the AxeOS system-info endpoint of your miner before installing.
+      de_DE: Vor der Installation BITAXE_API_URL auf den AxeOS-system-info-Endpunkt des eigenen Miners setzen.
+  author: MagicMikeMirror
+  developer: Bitaxe Monitor contributors
+  category: Finance
+  architectures: [amd64, arm64]
+  version: "1.0.0"
+  update_at: "2026-09-16"
+  website: https://github.com/MagicMikeMirror/bitaxe-monitor
+  repo: https://github.com/MagicMikeMirror/bitaxe-monitor
+  support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
+  docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
+  release_notes:
+    en_US: Initial public release.
+    de_DE: Erste öffentliche Version.

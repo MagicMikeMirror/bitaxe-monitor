@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Bitaxe Monitor">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#182433"/><stop offset="1" stop-color="#090d13"/></linearGradient></defs>
+  <rect width="256" height="256" rx="52" fill="url(#g)"/>
+  <circle cx="128" cy="128" r="82" fill="none" stroke="#40e0a0" stroke-width="10" opacity=".22"/>
+  <path d="M92 61h42c27 0 45 13 45 34 0 15-9 25-22 30 17 4 28 16 28 34 0 25-21 39-52 39H92V61zm29 24v30h12c12 0 19-5 19-15 0-10-7-15-20-15h-11zm0 53v36h15c14 0 22-6 22-18 0-12-8-18-23-18h-14z" fill="#f3f6fb"/>
+  <path d="M112 47v20m28-20v20m-28 122v20m28-20v20" stroke="#f3f6fb" stroke-width="9" stroke-linecap="round"/>
+  <path d="M40 170c28-1 37-29 55-30 19-2 22 23 40 21 19-2 25-38 43-41 15-2 20 11 38 9" fill="none" stroke="#57a6ff" stroke-width="8" stroke-linecap="round"/>
+</svg>
