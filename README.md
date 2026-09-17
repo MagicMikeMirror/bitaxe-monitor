@@ -13,7 +13,7 @@ events without Grafana, InfluxDB or additional containers.
   fallback-pool, overheat and block-found events
 - Live BTC/EUR and block-subsidy value
 - Public Pool statistics for the configured miner and its workers
-- Mining-stall incidents with duration and evidence-based likely cause
+- Mining-stall incidents with duration, stages and strictly observed causes
 - Diagnostic capture of safe AxeOS power and hardware fault fields
 - Responsive dark dashboard for TV, desktop and mobile
 - Single multi-architecture container with no Python dependencies

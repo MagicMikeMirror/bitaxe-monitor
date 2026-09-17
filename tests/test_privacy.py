@@ -36,20 +36,25 @@ class PrivacyTests(unittest.TestCase):
         for secret in ("bc1q", "secret", "private.pool", "private-wifi", "00:11", "192.168.1.99"):
             self.assertNotIn(secret, encoded)
 
-    def test_old_power_on_reason_is_not_current_power_failure(self):
-        start = {"voltage": 5520, "uptimeSeconds": 32000}
-        recovery = {"resetReason": "Reset due to power-on event", "uptimeSeconds": 34000}
-        self.assertNotIn("Stromversorgung", APP.incident_cause(start, recovery))
+    def test_power_fault_is_observed_cause(self):
+        self.assertIn("Power Fault detected", APP.observed_cause({"power_fault": "Power Fault Detected."}))
 
-    def test_new_power_on_reset_is_power_failure(self):
-        start = {"voltage": 5000, "uptimeSeconds": 32000}
-        recovery = {"resetReason": "Reset due to power-on event", "uptimeSeconds": 4}
-        self.assertIn("Stromversorgung", APP.incident_cause(start, recovery))
+    def test_metrics_do_not_invent_a_cause(self):
+        data = {"hashRate": 0, "power": 5, "voltage": 5530, "uptimeSeconds": 34000,
+                "resetReason": "Reset due to power-on event"}
+        self.assertIsNone(APP.observed_cause(data))
 
-    def test_software_reset_after_stall_is_firmware_incident(self):
-        start = {"voltage": 5520, "uptimeSeconds": 32000}
-        recovery = {"resetReason": "Software reset via esp_restart", "uptimeSeconds": 2}
-        self.assertIn("ASIC/Firmware", APP.incident_cause(start, recovery))
+    def test_replay_of_2026_09_17_incident_stays_unknown_without_fault_field(self):
+        before = {"hashRate": 1110.25, "power": 21.47, "voltage": 4921.88,
+                  "temp": 60, "uptimeSeconds": 32379}
+        stopped = {"hashRate": 0, "power": 5.0, "voltage": 5523.43,
+                   "temp": 22.75, "uptimeSeconds": 32519,
+                   "resetReason": "Reset due to power-on event"}
+        restarted = {"hashRate": 0, "power": 8.88, "voltage": 5406.25,
+                     "uptimeSeconds": 0, "resetReason": "Software reset via esp_restart"}
+        self.assertIsNone(APP.observed_cause(stopped))
+        self.assertIsNone(APP.observed_cause(restarted))
+        self.assertIn("1110 GH/s", APP.metrics_text(before))
 
 
 if __name__ == "__main__":

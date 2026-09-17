@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.0.4
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.0.5
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -44,12 +44,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.0.4"
+  version: "1.0.5"
   update_at: "2026-09-16"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Groups mining stalls into useful incidents with duration and likely cause, and hides legacy hashrate alert spam.
-    de_DE: Fasst Mining-Stillstände mit Dauer und wahrscheinlicher Ursache zusammen und blendet alte Hashrate-Meldungsfluten aus.
+    en_US: Records evidence-based incidents, prioritizes AxeOS power/hardware fault signals, and never invents an outage cause.
+    de_DE: Protokolliert evidenzbasierte Vorfälle, priorisiert AxeOS-Power-/Hardware-Faults und erfindet keine Ausfallursache.

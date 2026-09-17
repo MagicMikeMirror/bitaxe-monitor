@@ -93,8 +93,15 @@ def init_db():
 
 def add_event(kind, severity, message, ts=None):
     with db() as con:
-        con.execute("INSERT INTO events(ts,kind,severity,message) VALUES(?,?,?,?)",
-                    (ts or now(), kind, severity, message))
+        cur = con.execute("INSERT INTO events(ts,kind,severity,message) VALUES(?,?,?,?)",
+                          (ts or now(), kind, severity, message))
+        return cur.lastrowid
+
+
+def update_event(event_id, kind, severity, message):
+    with db() as con:
+        con.execute("UPDATE events SET kind=?,severity=?,message=? WHERE id=?",
+                    (kind, severity, message, event_id))
 
 
 def clean(raw):
@@ -117,30 +124,28 @@ def block_subsidy(height):
     return 50 / (2 ** halvings) if halvings < 64 else 0
 
 
-def incident_cause(start, recovery):
-    if start.get("overheat_mode") or (start.get("temp") or 0) >= TEMP_HIGH:
-        return "Überhitzung"
-    if start.get("miningPaused"):
-        return "Mining war pausiert"
-    if start.get("power_fault"):
-        return "Spannungsregler: " + str(start["power_fault"])
-    if start.get("hardware_fault"):
-        return "Hardware: " + str(start["hardware_fault"])
-    if (start.get("voltage") or 0) < 4500:
-        return "Unterspannung"
-    reset = str(recovery.get("resetReason") or "")
-    rebooted = (recovery.get("uptimeSeconds") or 0) + 30 < (start.get("uptimeSeconds") or 0)
-    if rebooted and "power" in reset.lower():
-        return "Stromversorgung unterbrochen (" + reset + ")"
-    if rebooted and ("software reset" in reset.lower() or "esp_restart" in reset.lower()):
-        return "ASIC/Firmware hing; Software-Neustart stellte Mining wieder her"
-    return "ASIC/Mining hing bei weiterlaufender Steuerung; Ursache nicht eindeutig"
+def observed_cause(data):
+    if data.get("power_fault"):
+        return "Power Fault detected: " + str(data["power_fault"])
+    if data.get("hardware_fault"):
+        return "Hardware Fault detected: " + str(data["hardware_fault"])
+    if data.get("overheat_mode"):
+        return "Überhitzungsschutz aktiv"
+    if data.get("miningPaused"):
+        return "Mining pausiert"
+    return None
 
 
 def duration_text(seconds):
     minutes, seconds = divmod(max(0, int(seconds)), 60)
     hours, minutes = divmod(minutes, 60)
     return (f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s")
+
+
+def metrics_text(data):
+    return (f"{data.get('hashRate') or 0:.0f} GH/s, {data.get('power') or 0:.1f} W, "
+            f"{(data.get('voltage') or 0) / 1000:.2f} V, {data.get('temp') or 0:.1f} °C, "
+            f"Uptime {duration_text(data.get('uptimeSeconds') or 0)}")
 
 
 def market_poller():
@@ -192,8 +197,6 @@ def detect(old, new):
     if not old:
         add_event("START", "info", "Monitoring gestartet")
         return
-    if (new.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0):
-        add_event("REBOOT", "warning", "Neustart erkannt: " + str(new.get("resetReason") or "unbekannt"))
     checks = [
         ("POWER", (old.get("power") or 0) <= POWER_HIGH < (new.get("power") or 0), "warning", f"Leistung über {POWER_HIGH:g} W"),
         ("TEMPERATURE", (old.get("temp") or 0) <= TEMP_HIGH < (new.get("temp") or 0), "critical", f"Temperatur über {TEMP_HIGH:g} °C"),
@@ -226,8 +229,8 @@ def poller():
     global miner_address
     was_online = None
     stopped_polls = 0
-    incident_started = None
-    incident_snapshot = None
+    candidate_before = None
+    incident = None
     while True:
         started = time.monotonic()
         try:
@@ -243,29 +246,52 @@ def poller():
             detect(old, data)
             save(data, now())
             hashrate = data.get("hashRate") or 0
-            if hashrate <= 10 and not data.get("miningPaused"):
+            fact = observed_cause(data)
+            rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
+            if incident and data.get("power_fault"):
+                incident["cause"] = fact
+            elif incident and fact and not incident["cause"]:
+                incident["cause"] = fact
+            if incident and rebooted:
+                incident["stages"].append("Neustart: " + str(data.get("resetReason") or "unbekannt"))
+            stopped = (hashrate <= 10 and not data.get("miningPaused")) or bool(fact)
+            if stopped:
+                if stopped_polls == 0:
+                    candidate_before = old
                 stopped_polls += 1
-                if stopped_polls == 3:
-                    incident_started = now() - (POLL_SECONDS * 2)
-                    incident_snapshot = data
-                    add_event("MINING_STOPPED", "critical",
-                              f"Mining steht: {data.get('power') or 0:.1f} W, "
-                              f"{(data.get('voltage') or 0) / 1000:.2f} V, "
-                              f"{data.get('temp') or 0:.1f} °C", incident_started)
+                if (stopped_polls == 3 or fact) and incident is None:
+                    started_at = now() if fact else now() - (POLL_SECONDS * 2)
+                    before = candidate_before or old or {}
+                    summary = ("Aktiv: Mining stopped. Letzter Wert vor Vorfall: " +
+                               metrics_text(before) + ". " + (fact or "Ursache unbekannt"))
+                    event_id = add_event("INCIDENT_ACTIVE", "critical", summary, started_at)
+                    incident = {"id": event_id, "start": started_at, "before": before,
+                                "cause": fact, "stages": ["Mining stopped"]}
             else:
-                if incident_started is not None:
-                    cause = incident_cause(incident_snapshot or {}, data)
-                    add_event("INCIDENT", "warning",
-                              f"Mining wieder aktiv nach {duration_text(now() - incident_started)}. "
-                              f"Wahrscheinliche Ursache: {cause}")
+                if incident is not None:
+                    stages = " → ".join(dict.fromkeys(incident["stages"] + ["Mining aktiv"]))
+                    cause = ("Beobachtete Ursache: " + incident["cause"] if incident["cause"]
+                             else "Beobachtete Ursache: keine; mögliche Ursache: unbekannt")
+                    update_event(incident["id"], "INCIDENT", "warning",
+                                 f"{stages}. Dauer {duration_text(now() - incident['start'])}. "
+                                 f"Letzter Wert vor Vorfall: {metrics_text(incident['before'])}. {cause}")
                 stopped_polls = 0
-                incident_started = None
-                incident_snapshot = None
-            if was_online is False:
+                candidate_before = None
+                incident = None
+            if was_online is False and incident:
+                incident["stages"].append("Gerät wieder erreichbar")
+            elif was_online is False:
                 add_event("RECOVERED", "info", "Bitaxe wieder erreichbar")
             was_online = True
         except Exception as exc:
-            if was_online is not False:
+            if incident:
+                if "Gerät nicht erreichbar" not in incident["stages"]:
+                    incident["stages"].append("Gerät nicht erreichbar")
+                    update_event(incident["id"], "INCIDENT_ACTIVE", "critical",
+                                 " → ".join(incident["stages"]) + ". " +
+                                 "Letzter Wert vor Vorfall: " + metrics_text(incident["before"]) + ". " +
+                                 (incident["cause"] or "Ursache unbekannt"))
+            elif was_online is not False:
                 add_event("OFFLINE", "critical", "Bitaxe nicht erreichbar")
             was_online = False
             print("poll failed:", type(exc).__name__, flush=True)
