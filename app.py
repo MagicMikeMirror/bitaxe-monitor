@@ -32,7 +32,8 @@ ALLOWED = (
     "bestSessionDiff", "poolDifficulty", "networkDifficulty", "responseTime",
     "uptimeSeconds", "totalUptimeSeconds", "resetReason", "blockFound",
     "overheat_mode", "wifiStatus", "wifiRSSI", "miningPaused",
-    "isUsingFallbackStratum", "version", "boardVersion", "fanrpm"
+    "isUsingFallbackStratum", "version", "boardVersion", "fanrpm",
+    "power_fault", "hardware_fault", "sharesRejectedReasons", "smallCoreCount"
 )
 
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
@@ -116,6 +117,32 @@ def block_subsidy(height):
     return 50 / (2 ** halvings) if halvings < 64 else 0
 
 
+def incident_cause(start, recovery):
+    if start.get("overheat_mode") or (start.get("temp") or 0) >= TEMP_HIGH:
+        return "Überhitzung"
+    if start.get("miningPaused"):
+        return "Mining war pausiert"
+    if start.get("power_fault"):
+        return "Spannungsregler: " + str(start["power_fault"])
+    if start.get("hardware_fault"):
+        return "Hardware: " + str(start["hardware_fault"])
+    if (start.get("voltage") or 0) < 4500:
+        return "Unterspannung"
+    reset = str(recovery.get("resetReason") or "")
+    rebooted = (recovery.get("uptimeSeconds") or 0) + 30 < (start.get("uptimeSeconds") or 0)
+    if rebooted and "power" in reset.lower():
+        return "Stromversorgung unterbrochen (" + reset + ")"
+    if rebooted and ("software reset" in reset.lower() or "esp_restart" in reset.lower()):
+        return "ASIC/Firmware hing; Software-Neustart stellte Mining wieder her"
+    return "ASIC/Mining hing bei weiterlaufender Steuerung; Ursache nicht eindeutig"
+
+
+def duration_text(seconds):
+    minutes, seconds = divmod(max(0, int(seconds)), 60)
+    hours, minutes = divmod(minutes, 60)
+    return (f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s")
+
+
 def market_poller():
     global market_cache
     while True:
@@ -170,7 +197,6 @@ def detect(old, new):
     checks = [
         ("POWER", (old.get("power") or 0) <= POWER_HIGH < (new.get("power") or 0), "warning", f"Leistung über {POWER_HIGH:g} W"),
         ("TEMPERATURE", (old.get("temp") or 0) <= TEMP_HIGH < (new.get("temp") or 0), "critical", f"Temperatur über {TEMP_HIGH:g} °C"),
-        ("HASHRATE", (old.get("hashRate") or HASHRATE_LOW) >= HASHRATE_LOW > (new.get("hashRate") or 0), "warning", f"Hashrate unter {HASHRATE_LOW:g} GH/s"),
         ("FALLBACK_POOL", not bool(old.get("isUsingFallbackStratum")) and bool(new.get("isUsingFallbackStratum")), "warning", "Fallback-Pool aktiv"),
         ("BLOCK_FOUND", (new.get("blockFound") or 0) > (old.get("blockFound") or 0), "critical", "Block-Fund gemeldet"),
         ("OVERHEAT", not bool(old.get("overheat_mode")) and bool(new.get("overheat_mode")), "critical", "Überhitzungsschutz aktiv"),
@@ -199,6 +225,9 @@ def save(data, ts):
 def poller():
     global miner_address
     was_online = None
+    stopped_polls = 0
+    incident_started = None
+    incident_snapshot = None
     while True:
         started = time.monotonic()
         try:
@@ -213,6 +242,25 @@ def poller():
             old = previous()
             detect(old, data)
             save(data, now())
+            hashrate = data.get("hashRate") or 0
+            if hashrate <= 10 and not data.get("miningPaused"):
+                stopped_polls += 1
+                if stopped_polls == 3:
+                    incident_started = now() - (POLL_SECONDS * 2)
+                    incident_snapshot = data
+                    add_event("MINING_STOPPED", "critical",
+                              f"Mining steht: {data.get('power') or 0:.1f} W, "
+                              f"{(data.get('voltage') or 0) / 1000:.2f} V, "
+                              f"{data.get('temp') or 0:.1f} °C", incident_started)
+            else:
+                if incident_started is not None:
+                    cause = incident_cause(incident_snapshot or {}, data)
+                    add_event("INCIDENT", "warning",
+                              f"Mining wieder aktiv nach {duration_text(now() - incident_started)}. "
+                              f"Wahrscheinliche Ursache: {cause}")
+                stopped_polls = 0
+                incident_started = None
+                incident_snapshot = None
             if was_online is False:
                 add_event("RECOVERED", "info", "Bitaxe wieder erreichbar")
             was_online = True
@@ -260,7 +308,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"online": age < POLL_SECONDS * 3, "age_seconds": age, "data": json.loads(row["payload"])})
         if p.path == "/api/events":
             with db() as con:
-                rows = con.execute("SELECT ts,kind,severity,message FROM events ORDER BY ts DESC LIMIT 100").fetchall()
+                rows = con.execute("SELECT ts,kind,severity,message FROM events WHERE kind <> 'HASHRATE' ORDER BY ts DESC LIMIT 100").fetchall()
             return self.send_json([dict(r) for r in rows])
         if p.path == "/api/market":
             with market_lock:

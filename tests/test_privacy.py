@@ -36,6 +36,21 @@ class PrivacyTests(unittest.TestCase):
         for secret in ("bc1q", "secret", "private.pool", "private-wifi", "00:11", "192.168.1.99"):
             self.assertNotIn(secret, encoded)
 
+    def test_old_power_on_reason_is_not_current_power_failure(self):
+        start = {"voltage": 5520, "uptimeSeconds": 32000}
+        recovery = {"resetReason": "Reset due to power-on event", "uptimeSeconds": 34000}
+        self.assertNotIn("Stromversorgung", APP.incident_cause(start, recovery))
+
+    def test_new_power_on_reset_is_power_failure(self):
+        start = {"voltage": 5000, "uptimeSeconds": 32000}
+        recovery = {"resetReason": "Reset due to power-on event", "uptimeSeconds": 4}
+        self.assertIn("Stromversorgung", APP.incident_cause(start, recovery))
+
+    def test_software_reset_after_stall_is_firmware_incident(self):
+        start = {"voltage": 5520, "uptimeSeconds": 32000}
+        recovery = {"resetReason": "Software reset via esp_restart", "uptimeSeconds": 2}
+        self.assertIn("ASIC/Firmware", APP.incident_cause(start, recovery))
+
 
 if __name__ == "__main__":
     unittest.main()
