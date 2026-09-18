@@ -74,6 +74,26 @@ class TimeWeightedHashrateTests(unittest.TestCase):
         self.assertAlmostEqual(value["average"], 800)
         self.assertEqual(value["coverage"], end)
 
+    def test_h_database_summary_reads_confirmed_incidents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "history.sqlite3")
+            try:
+                APP.init_db()
+                end = 100000
+                for stamp, rate in samples(end - 3600, end):
+                    APP.save({"hashRate": rate}, stamp)
+                with APP.db() as con:
+                    con.execute("""INSERT INTO incidents
+                        (started_at,ended_at,status,kind,severity,title,summary,facts,created_at,updated_at)
+                        VALUES(?,?,'RESOLVED','NETWORK_OR_API_OUTAGE','warning','offline','offline','{}',?,?)""",
+                        (end - 1800, end - 1200, end, end))
+                result = APP.historical_hashrate(end)
+                self.assertIsNotNone(result["avg_24h"])
+                self.assertGreater(result["coverage_24h"], 0)
+            finally:
+                APP.DB_PATH = original
+
 
 if __name__ == "__main__":
     unittest.main()
