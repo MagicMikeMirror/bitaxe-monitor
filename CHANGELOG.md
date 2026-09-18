@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.5
+
+- Consolidate Health Summary and device details into one compact status card.
+- Promote the current BTC/EUR spot price in the Bitcoin and block-value card.
+- Show Coinbase as the price source together with the last refresh time.
+
 ## 1.1.4
 
 - Label ASIC temperature, VR temperature, power and input voltage explicitly.
