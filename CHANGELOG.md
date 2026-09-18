@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.7
+
+- Show the last successful dashboard refresh time beside ONLINE.
+- Add a per-second countdown to the next automatic refresh.
+
 ## 1.1.6
 
 - Add a compact 24-hour BTC/EUR price chart to the Bitcoin card.
