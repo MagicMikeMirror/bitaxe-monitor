@@ -209,7 +209,7 @@ def get_sample_window(start, end):
 def backfill_historical_incidents(days=30):
     """Create evidence-only incidents from existing raw samples once after upgrading."""
     with db() as con:
-        if con.execute("SELECT 1 FROM monitor_state WHERE key='backfill_v11'").fetchone():
+        if con.execute("SELECT 1 FROM monitor_state WHERE key='backfill_v11_1'").fetchone():
             return
         rows = con.execute("SELECT ts,payload FROM samples WHERE ts>=? ORDER BY ts",
                            (now() - days * 86400,)).fetchall()
@@ -222,24 +222,28 @@ def backfill_historical_incidents(days=30):
         if len(run) >= STALL_AFTER_POLLS and run[-1]["ts"] - run[0]["ts"] >= POLL_SECONDS * 2:
             first, last = run[0], run[-1]
             with db() as con:
-                exists = con.execute("SELECT 1 FROM incidents WHERE started_at BETWEEN ? AND ?",
+                exists = con.execute("SELECT id FROM incidents WHERE started_at BETWEEN ? AND ?",
                                      (first["ts"] - POLL_SECONDS, first["ts"] + POLL_SECONDS)).fetchone()
+            kind, reason = classify_incident(before, first, after or {})
             if not exists:
-                kind, reason = classify_incident(before, first, after or {})
                 incident_id = create_incident(first["ts"], kind, kind.replace("_", " "),
                                               reason or "Ursache nicht eindeutig", "warning",
                                               observed_cause(first), {"historical_reconstruction": True}, before)
-                for sample in run:
-                    attach_incident_sample(incident_id, sample["ts"], "during", sample)
-                recovery = "Mining in gespeicherten Messwerten wieder aktiv" if after else "Ende nicht beobachtet"
-                update_incident(incident_id, ended_at=(after or last)["ts"], status="RESOLVED" if after else "UNKNOWN",
-                                recovery=recovery, after_sample=after)
+            else:
+                incident_id = exists["id"]
+            for sample in run:
+                attach_incident_sample(incident_id, sample["ts"], "during", sample)
+            recovery = "Mining in gespeicherten Messwerten wieder aktiv" if after else "Ende nicht beobachtet"
+            update_incident(incident_id, ended_at=(after or last)["ts"], status="RESOLVED" if after else "UNKNOWN",
+                            kind=kind, title=kind.replace("_", " "), summary=reason or "Ursache nicht eindeutig",
+                            recovery=recovery, after_sample=after,
+                            facts={"historical_reconstruction": True})
         run = []
         before = None
 
     for row in rows:
         sample = safe_payload(json.loads(row["payload"])) | {"ts": row["ts"]}
-        stopped = (sample.get("hashRate") or 0) <= 10 and 0 < (sample.get("power") or 0) <= IDLE_POWER_W
+        stopped = (sample.get("hashRate") or 0) <= 10 and not sample.get("miningPaused")
         if stopped:
             if not run:
                 before = last_normal
@@ -251,7 +255,7 @@ def backfill_historical_incidents(days=30):
     if run:
         finish()
     with db() as con:
-        con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('backfill_v11',?)", (str(now()),))
+        con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('backfill_v11_1',?)", (str(now()),))
 
 
 def add_event(kind, severity, message, ts=None):
