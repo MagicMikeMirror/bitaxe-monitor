@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.4
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.5
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -50,12 +50,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.1.4"
+  version: "1.1.5"
   update_at: "2026-09-18"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Adds a complete four-series chart legend and separates overlapping ASIC and VR temperatures with a dashed VR line.
-    de_DE: Ergänzt die vollständige Vier-Linien-Legende und trennt überlappende ASIC-/VR-Temperaturen durch eine gestrichelte VR-Linie.
+    en_US: Consolidates health and device status and makes the live BTC/EUR market price prominent in the block-value card.
+    de_DE: Konsolidiert Health- und Gerätestatus und zeigt den aktuellen BTC/EUR-Börsenkurs prominent in der Blockwert-Kachel.
