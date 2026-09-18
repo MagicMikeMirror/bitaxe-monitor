@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1
+
+- Keep zero-hashrate restart samples inside historical incidents until mining actually resumes.
+- Reconcile previously derived v1.1.0 incidents without changing raw samples or legacy events.
+
 ## 1.1.0
 
 - Persistent flight-recorder incidents with five-minute pre-crash statistics.

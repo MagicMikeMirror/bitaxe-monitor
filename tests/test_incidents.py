@@ -57,14 +57,18 @@ class IncidentClassificationTests(unittest.TestCase):
                 for offset in (10, 20, 30, 40):
                     APP.save({"hashRate": 0, "power": 5.0, "voltage": 5523,
                               "temp": 23, "uptimeSeconds": 32379 + offset}, base + offset)
+                APP.save({"hashRate": 0, "power": 8.88, "voltage": 5406,
+                          "uptimeSeconds": 0, "resetReason": "Software reset via esp_restart"}, base + 50)
                 APP.save({"hashRate": 1100, "power": 20, "voltage": 5090,
-                          "uptimeSeconds": 20, "resetReason": "Software reset via esp_restart"}, base + 50)
+                          "uptimeSeconds": 20, "resetReason": "Software reset via esp_restart"}, base + 60)
                 APP.backfill_historical_incidents()
                 with sqlite3.connect(APP.DB_PATH) as con:
-                    row = con.execute("SELECT kind,before_sample,pre_stats FROM incidents").fetchone()
+                    row = con.execute("SELECT kind,before_sample,pre_stats,ended_at,after_sample FROM incidents").fetchone()
                 self.assertEqual(row[0], "MINING_STALL")
                 self.assertIn('"hashRate":1110', row[1])
                 self.assertIn('"power"', row[2])
+                self.assertEqual(row[3], base + 60)
+                self.assertIn('"hashRate":1100', row[4])
             finally:
                 APP.DB_PATH = original
 
