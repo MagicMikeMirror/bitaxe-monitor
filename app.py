@@ -33,6 +33,8 @@ market_cache = {"updated": None, "btc_eur": None, "block_btc": None, "price_hist
                 "miner": {}, "network": {}}
 market_lock = threading.Lock()
 miner_address = None
+hashrate_cache = {"updated": 0, "data": {}}
+hashrate_lock = threading.Lock()
 
 ALLOWED = (
     "power", "voltage", "current", "temp", "vrTemp", "coreVoltageActual",
@@ -54,10 +56,10 @@ INCIDENT_KINDS = {
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Bitaxe Monitor</title>
 <style>
-:root{color-scheme:dark;--bg:#070a0f;--card:#101620;--muted:#8390a3;--text:#f3f6fb;--green:#40e0a0;--yellow:#ffc857;--red:#ff5964;--blue:#57a6ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% -20%,#172638,#070a0f 45%);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1600px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center}.brand{font-size:clamp(23px,3vw,40px);font-weight:800;letter-spacing:.03em}.status{display:flex;gap:9px;align-items:center;color:var(--muted)}.dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 18px currentColor}.dot.ok{background:var(--green)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:20px 0}.card{background:linear-gradient(145deg,#121a25,#0d121a);border:1px solid #202b3a;border-radius:16px;padding:16px;min-width:0;box-shadow:0 10px 35px #0005}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.value{font-size:clamp(22px,2.4vw,38px);font-weight:750;margin-top:7px;white-space:nowrap}.sub{color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis}.wide{grid-column:span 3}.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}.facts.poolfacts{grid-template-columns:repeat(4,1fr)}.fact{background:#0b1119;border-radius:10px;padding:10px}.fact b{display:block;font-size:18px;margin-top:3px}.healthdetails{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px;padding-top:11px;border-top:1px solid #202b3a;color:#bac5d4;font-size:13px}.healthdetails b{color:var(--text);font-weight:650}.pricechart{height:105px;margin:9px 0 2px}.pricechart canvas{width:100%;height:105px}.pricechange{font-weight:700}.pricechange.up{color:var(--green)}.pricechange.down{color:var(--red)}.chart{height:230px;position:relative}.chart canvas{width:100%;height:190px}.dual{height:230px;display:grid;grid-template-rows:1fr 1fr;gap:8px;margin-top:4px}.mini{min-height:0;position:relative}.mini canvas{width:100%;height:94px}.legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;color:var(--muted);font-size:12px}.key{display:inline-block;width:18px;height:3px;border-radius:2px;margin:0 6px 3px 0;vertical-align:middle}.key.asic{background:var(--red)}.key.vr{height:0;border-top:3px dashed var(--yellow)}.key.power{background:var(--blue)}.key.voltage{background:var(--green)}.tabs{display:flex;gap:7px}.tabs button{background:#182231;color:#bac5d4;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}.tabs button.active{background:var(--blue);color:#04101d}.events{max-height:310px;overflow:auto}.event{display:grid;grid-template-columns:145px minmax(155px,190px) minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid #202b3a;align-items:start}.event>*{min-width:0}.event>b{white-space:nowrap}.event>span:last-child{overflow-wrap:anywhere;line-height:1.45}.sev-warning{color:var(--yellow)}.sev-critical{color:var(--red)}.sev-info{color:var(--green)}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}.wide{grid-column:span 3}.facts.poolfacts{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.wrap{padding:13px}.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}.facts,.facts.poolfacts{grid-template-columns:1fr}.event{grid-template-columns:1fr;gap:4px}.event>b{white-space:normal}.top{align-items:flex-start;flex-direction:column}.chart{height:210px}.dual{height:220px}}
+:root{color-scheme:dark;--bg:#070a0f;--card:#101620;--muted:#8390a3;--text:#f3f6fb;--green:#40e0a0;--yellow:#ffc857;--red:#ff5964;--blue:#57a6ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% -20%,#172638,#070a0f 45%);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1600px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center}.brand{font-size:clamp(23px,3vw,40px);font-weight:800;letter-spacing:.03em}.status{display:flex;gap:9px;align-items:center;color:var(--muted)}.dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 18px currentColor}.dot.ok{background:var(--green)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:20px 0}.card{background:linear-gradient(145deg,#121a25,#0d121a);border:1px solid #202b3a;border-radius:16px;padding:16px;min-width:0;box-shadow:0 10px 35px #0005}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.value{font-size:clamp(22px,2.4vw,38px);font-weight:750;margin-top:7px;white-space:nowrap}.sub{color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis}.hashstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:9px}.hashstat{min-width:0;color:var(--muted);font-size:10px;text-transform:uppercase}.hashstat b{display:block;color:#dce5f1;font-size:13px;line-height:1.2;white-space:nowrap}.hashstat small{display:block;color:var(--muted);font-size:9px;white-space:nowrap}.wide{grid-column:span 3}.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}.facts.poolfacts{grid-template-columns:repeat(4,1fr)}.fact{background:#0b1119;border-radius:10px;padding:10px}.fact b{display:block;font-size:18px;margin-top:3px}.healthdetails{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px;padding-top:11px;border-top:1px solid #202b3a;color:#bac5d4;font-size:13px}.healthdetails b{color:var(--text);font-weight:650}.pricechart{height:105px;margin:9px 0 2px}.pricechart canvas{width:100%;height:105px}.pricechange{font-weight:700}.pricechange.up{color:var(--green)}.pricechange.down{color:var(--red)}.chart{height:230px;position:relative}.chart canvas{width:100%;height:190px}.dual{height:230px;display:grid;grid-template-rows:1fr 1fr;gap:8px;margin-top:4px}.mini{min-height:0;position:relative}.mini canvas{width:100%;height:94px}.legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;color:var(--muted);font-size:12px}.key{display:inline-block;width:18px;height:3px;border-radius:2px;margin:0 6px 3px 0;vertical-align:middle}.key.asic{background:var(--red)}.key.vr{height:0;border-top:3px dashed var(--yellow)}.key.power{background:var(--blue)}.key.voltage{background:var(--green)}.tabs{display:flex;gap:7px}.tabs button{background:#182231;color:#bac5d4;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}.tabs button.active{background:var(--blue);color:#04101d}.events{max-height:310px;overflow:auto}.event{display:grid;grid-template-columns:145px minmax(155px,190px) minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid #202b3a;align-items:start}.event>*{min-width:0}.event>b{white-space:nowrap}.event>span:last-child{overflow-wrap:anywhere;line-height:1.45}.sev-warning{color:var(--yellow)}.sev-critical{color:var(--red)}.sev-info{color:var(--green)}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}.wide{grid-column:span 3}.facts.poolfacts{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.wrap{padding:13px}.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}.facts,.facts.poolfacts{grid-template-columns:1fr}.hashstats{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:8px}.event{grid-template-columns:1fr;gap:4px}.event>b{white-space:normal}.top{align-items:flex-start;flex-direction:column}.chart{height:210px}.dual{height:220px}}
 .status{flex-wrap:wrap;justify-content:flex-end}.refresh{font-variant-numeric:tabular-nums;white-space:nowrap}
 </style></head><body><main class="wrap"><div class="top"><div><div class="brand">₿ BITAXE GAMMA 601</div><div class="sub" id="ver">AxeOS</div></div><div class="status"><span class="dot" id="dot"></span><b id="state">WARTE AUF DATEN</b><span class="refresh" id="seen">Refresh —</span></div></div>
-<section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="sub" id="hashSub">—</div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="voltage">—</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
+<section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="hashstats"><div class="hashstat">10m<b id="hash10m">—</b></div><div class="hashstat">1h<b id="hash1h">—</b></div><div class="hashstat">24h<b id="hash24h">—</b><small id="cover24h"></small></div><div class="hashstat">7d<b id="hash7d">—</b><small id="cover7d"></small></div></div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="voltage">—</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
 <div class="card" style="grid-column:1/-1"><div class="label">Health & Gerätestatus</div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div><div class="healthdetails" id="healthDetails"></div></div>
 <div class="card wide"><div class="label">Bitcoin & Blockwert</div><div class="value" id="btcEur">—</div><div class="sub"><span id="priceUpdated">Aktueller BTC/EUR-Kurs</span> · <span class="pricechange" id="priceChange">24h —</span></div><div class="pricechart"><canvas id="btcPriceChart"></canvas></div><div class="facts"><div class="fact"><span class="sub">Block-Reward</span><b id="blockBtc">— BTC</b></div><div class="fact"><span class="sub">24h Tief / Hoch</span><b id="priceRange">—</b></div><div class="fact"><span class="sub">Blockwert (ohne Gebühren)</span><b id="blockEur">—</b></div></div><div class="sub">Blockhöhe <span id="blockHeight">—</span></div></div>
 <div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
@@ -67,7 +69,8 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 <script>
 const $=id=>document.getElementById(id), fmt=(v,d=1)=>v==null?'—':Number(v).toFixed(d), dur=s=>{if(s==null)return'—';let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=Math.floor(s%60);if(d)return d+'d '+h+'h '+m+'m';if(h)return h+'h '+m+'m';return m+'m '+x+'s'}, diff=v=>{if(v==null)return'—';if(v>=1e12)return(v/1e12).toFixed(2)+'T';if(v>=1e9)return(v/1e9).toFixed(2)+'G';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1e3)return(v/1e3).toFixed(2)+'K';return String(v)};
 const REFRESH_MS=10000;let lastRefreshAt=0,nextRefreshAt=0;function markRefresh(){lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+REFRESH_MS;refreshClock()}function refreshClock(){if(!lastRefreshAt){$('seen').textContent='Refresh —';return}let next=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000)),stamp=new Date(lastRefreshAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});$('seen').textContent='Refresh '+stamp+' · nächster in '+next+'s'}
-async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hashSub').textContent='10m '+fmt(d.hashRate_10m/1000,2)+(d.expectedHashrate?' · Soll '+fmt(d.expectedHashrate/1000,2):'')+' TH/s';$('power').textContent=fmt(d.power)+' W';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
+const coverage=s=>{if(!s)return'';if(s>=86400)return Math.floor(s/86400)+'d Daten';return Math.max(1,Math.floor(s/3600))+'h Daten'};
+async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},h=x.hashrate_history||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hash10m').textContent=fmt(d.hashRate_10m/1000,2);$('hash1h').textContent=fmt(d.hashRate_1h/1000,2);$('hash24h').textContent=fmt(h.avg_24h/1000,2);$('hash7d').textContent=fmt(h.avg_7d/1000,2);$('cover24h').textContent=h.complete_24h?'':coverage(h.coverage_24h);$('cover7d').textContent=h.complete_7d?'':coverage(h.coverage_7d);$('power').textContent=fmt(d.power)+' W';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Erwartete Hashrate',fmt(d.expectedHashrate/1000,3)+' TH/s'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
 async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockBtc').textContent=x.block_btc==null?'— BTC':Number(x.block_btc).toFixed(4)+' BTC';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('priceRange').textContent=x.price_low==null?'—':eur(x.price_low)+' / '+eur(x.price_high);$('blockEur').textContent=eur(x.block_eur);$('blockHeight').textContent=x.network?.blocks?.toLocaleString('de-DE')||'—';draw('btcPriceChart',[{values:p.map(v=>v.close),color:color,width:2.5}],{decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
 function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=42,right=8,top=9,bottom=18;c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.values.filter(v=>v!=null));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';ctx.lineWidth=1;for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}(opt.markers||[]).forEach(m=>{let span=Math.max(1,opt.end-opt.start),x1=left+(m.started_at-opt.start)*(w-left-right)/span,x2=left+((m.ended_at||opt.end)-opt.start)*(w-left-right)/span;ctx.fillStyle='#ff596426';ctx.fillRect(Math.max(left,x1),top,Math.max(2,x2-x1),h-top-bottom)});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.values.forEach((v,i)=>{if(v==null)return;let x=left+i*(w-left-right)/Math.max(1,s.values.length-1),y=top+(max-v)*(h-top-bottom)/(max-min);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([])}
@@ -126,6 +129,101 @@ def init_db():
           key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
         """)
+
+
+def merge_intervals(intervals, start, end):
+    clipped = sorted((max(start, a), min(end, b)) for a, b in intervals if b > start and a < end)
+    merged = []
+    for left, right in clipped:
+        if not merged or left > merged[-1][1]:
+            merged.append([left, right])
+        else:
+            merged[-1][1] = max(merged[-1][1], right)
+    return [tuple(value) for value in merged]
+
+
+def time_weighted_hashrate(samples, start, end, offline_intervals=(), carry_seconds=None):
+    """Integrate observed GH/s over covered time; confirmed downtime contributes zero."""
+    carry = carry_seconds or POLL_SECONDS * 3
+    samples = sorted((int(ts), float(rate or 0)) for ts, rate in samples if ts <= end)
+    offline = merge_intervals(offline_intervals, start, end)
+    measured = []
+    for index, (stamp, rate) in enumerate(samples):
+        left = max(start, stamp)
+        next_stamp = samples[index + 1][0] if index + 1 < len(samples) else end
+        right = min(end, next_stamp, stamp + carry)
+        if right > left:
+            measured.append((left, right, rate))
+    measured_seconds = sum(right - left for left, right, _ in measured)
+    offline_seconds = sum(right - left for left, right in offline)
+    work = sum((right - left) * rate for left, right, rate in measured)
+    overlap_seconds = 0
+    measured_index = offline_index = 0
+    while measured_index < len(measured) and offline_index < len(offline):
+        measured_left, measured_right, rate = measured[measured_index]
+        offline_left, offline_right = offline[offline_index]
+        overlap = max(0, min(measured_right, offline_right) - max(measured_left, offline_left))
+        if overlap:
+            overlap_seconds += overlap
+            work -= overlap * rate
+        if measured_right <= offline_right:
+            measured_index += 1
+        else:
+            offline_index += 1
+    covered = measured_seconds + offline_seconds - overlap_seconds
+    return {"average": None if not covered else work / covered, "coverage": int(covered)}
+
+
+def confirmed_downtime(con, start, end):
+    kinds = ("POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
+             "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "UNKNOWN")
+    placeholders = ",".join("?" for _ in kinds)
+    rows = con.execute(f"""SELECT started_at,COALESCE(ended_at,?) ended_at FROM incidents
+        WHERE kind IN ({placeholders}) AND started_at<? AND COALESCE(ended_at,?)>?""",
+        (end, *kinds, end, start)).fetchall()
+    intervals = [(row["started_at"], row["ended_at"]) for row in rows]
+    open_since = None
+    for event in con.execute("""SELECT ts,kind FROM events WHERE kind IN ('OFFLINE','RECOVERED')
+        AND ts<=? ORDER BY ts""", (end,)):
+        if event["kind"] == "OFFLINE":
+            open_since = event["ts"]
+        elif open_since is not None:
+            intervals.append((open_since, event["ts"]))
+            open_since = None
+    if open_since is not None:
+        intervals.append((open_since, end))
+    return merge_intervals(intervals, start, end)
+
+
+def historical_hashrate(at=None):
+    end = int(at or now())
+    result = {}
+    with db() as con:
+        first = con.execute("SELECT MIN(ts) FROM samples").fetchone()[0]
+        for label, seconds in (("24h", 86400), ("7d", 604800)):
+            start = end - seconds
+            query_start = start - POLL_SECONDS * 3
+            rows = con.execute("SELECT ts,hashrate FROM samples WHERE ts>=? AND ts<=? ORDER BY ts",
+                               (query_start, end)).fetchall()
+            downtime = confirmed_downtime(con, start, end)
+            measured_start = max(start, first) if first is not None else end
+            calculation = time_weighted_hashrate(
+                [(row["ts"], row["hashrate"]) for row in rows], measured_start, end,
+                downtime, POLL_SECONDS * 3)
+            coverage = calculation["coverage"]
+            result[f"avg_{label}"] = calculation["average"]
+            result[f"coverage_{label}"] = coverage
+            result[f"complete_{label}"] = coverage >= seconds - POLL_SECONDS * 3
+    return result
+
+
+def cached_historical_hashrate(at=None):
+    stamp = int(at or now())
+    with hashrate_lock:
+        if stamp - hashrate_cache["updated"] >= 60 or not hashrate_cache["data"]:
+            hashrate_cache["data"] = historical_hashrate(stamp)
+            hashrate_cache["updated"] = stamp
+        return dict(hashrate_cache["data"])
 
 
 def calculated_current(data):
@@ -606,7 +704,8 @@ class Handler(BaseHTTPRequestHandler):
                 state = "MINING STALLED"
             summary = health_summary(state, data, last_incident[0] if last_incident else None)
             return self.send_json({"online": age < POLL_SECONDS * 3, "state": state,
-                                   "age_seconds": age, "summary": summary, "data": data})
+                                   "age_seconds": age, "summary": summary, "data": data,
+                                   "hashrate_history": cached_historical_hashrate()})
         if p.path == "/api/events":
             with db() as con:
                 rows = con.execute("SELECT ts,kind,severity,message FROM events WHERE kind <> 'HASHRATE' ORDER BY ts DESC LIMIT 100").fetchall()

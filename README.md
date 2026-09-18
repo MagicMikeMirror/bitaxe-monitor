@@ -76,6 +76,12 @@ Health endpoint: `http://localhost:8787/healthz`
 | `VOLTAGE_LOW_V` | `4.75` | Low-input-voltage diagnostic threshold |
 | `EXPECTED_HASHRATE_GH` | `0` | Optional expected hashrate; 0 uses AxeOS when available |
 
+The hashrate card shows the live AxeOS value plus 10-minute and 1-hour AxeOS
+averages. Its 24-hour and 7-day values are calculated from the persistent
+SQLite history as time-weighted production averages. Confirmed downtime counts
+as zero; isolated missed polls do not become artificial outages. Until a full
+window is available, the dashboard labels the actual data coverage.
+
 ## Flight recorder and diagnosis
 
 Version 1.1 stores incidents separately from the unchanged raw sample history. Each

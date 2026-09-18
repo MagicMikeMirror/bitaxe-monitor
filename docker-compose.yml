@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.7
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.8
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -51,12 +51,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.1.7"
+  version: "1.1.8"
   update_at: "2026-09-18"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Shows the last successful dashboard refresh time and a live countdown to the next refresh.
-    de_DE: Zeigt die letzte erfolgreiche Dashboard-Aktualisierung und einen Live-Countdown bis zur nächsten Aktualisierung.
+    en_US: Adds persistent time-weighted 24-hour and 7-day hashrate averages, including confirmed downtime and transparent data coverage.
+    de_DE: Ergänzt persistente, zeitgewichtete 24-Stunden- und 7-Tage-Hashrate-Werte inklusive bestätigter Ausfälle und transparenter Datenabdeckung.
