@@ -15,6 +15,15 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual(APP.block_subsidy(839999), 6.25)
         self.assertEqual(APP.block_subsidy(840000), 3.125)
 
+    def test_market_candles_are_sorted_and_summarized(self):
+        candles = [[300, 99, 112, 100, 110, 1], [100, 89, 101, 90, 100, 1],
+                   [200, 94, 106, 95, 105, 1], [10, 1, 2, 1, 2, 1]]
+        history, change, low, high = APP.summarize_candles(candles, 100)
+        self.assertEqual([point["ts"] for point in history], [100, 200, 300])
+        self.assertEqual(change, 10)
+        self.assertEqual(low, 89)
+        self.assertEqual(high, 112)
+
     def test_mining_address_is_transient_only(self):
         raw = {"stratumUser": "bc1q-test-address.worker"}
         self.assertEqual(APP.mining_address(raw), "bc1q-test-address")

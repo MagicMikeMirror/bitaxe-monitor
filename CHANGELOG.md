@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.6
+
+- Add a compact 24-hour BTC/EUR price chart to the Bitcoin card.
+- Show 24-hour percentage change and daily low/high with green/red direction.
+
 ## 1.1.5
 
 - Consolidate Health Summary and device details into one compact status card.

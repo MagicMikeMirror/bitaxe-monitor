@@ -12,6 +12,7 @@ events without Grafana, InfluxDB or additional containers.
 - Correlated offline, recovery, restart, power, thermal, pool and mining-stall incidents
 - Informational rejected-share events and cautious block-candidate detection
 - Live BTC/EUR and block-subsidy value
+- Compact 24-hour BTC/EUR chart with change, low and high
 - Public Pool statistics for the configured miner and its workers
 - Mining-stall incidents with duration, stages and strictly observed causes
 - Persistent flight recorder with five-minute pre-incident snapshots and min/max/average values
@@ -66,6 +67,7 @@ Health endpoint: `http://localhost:8787/healthz`
 | `HASHRATE_LOW_GH` | `750` | Low-hashrate event threshold |
 | `PUBLIC_POOL_API_URL` | `https://public-pool.io:40557/api` | Public Pool API endpoint |
 | `BTC_PRICE_URL` | Coinbase BTC/EUR spot API | BTC/EUR price endpoint |
+| `BTC_HISTORY_URL` | Coinbase Exchange BTC/EUR candles | Public hourly candles for the 24-hour chart |
 | `MARKET_SECONDS` | `300` | Market and Public Pool refresh interval |
 | `OFFLINE_AFTER_POLLS` | `3` | Failed polls required before OFFLINE |
 | `RECOVERY_POLLS` | `3` | Successful polls required before ONLINE |
