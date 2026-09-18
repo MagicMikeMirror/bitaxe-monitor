@@ -17,6 +17,12 @@ PORT = int(os.getenv("PORT", "8080"))
 POWER_HIGH = float(os.getenv("POWER_HIGH_W", "35"))
 TEMP_HIGH = float(os.getenv("TEMP_HIGH_C", "75"))
 HASHRATE_LOW = float(os.getenv("HASHRATE_LOW_GH", "750"))
+EXPECTED_HASHRATE = float(os.getenv("EXPECTED_HASHRATE_GH", "0"))
+OFFLINE_AFTER_POLLS = max(2, int(os.getenv("OFFLINE_AFTER_POLLS", "3")))
+RECOVERY_POLLS = max(1, int(os.getenv("RECOVERY_POLLS", "3")))
+STALL_AFTER_POLLS = max(2, int(os.getenv("STALL_AFTER_POLLS", "3")))
+IDLE_POWER_W = float(os.getenv("IDLE_POWER_W", "8"))
+VOLTAGE_LOW_V = float(os.getenv("VOLTAGE_LOW_V", "4.75"))
 PUBLIC_POOL_API_URL = os.getenv("PUBLIC_POOL_API_URL", "https://public-pool.io:40557/api").rstrip("/")
 BTC_PRICE_URL = os.getenv("BTC_PRICE_URL", "https://api.coinbase.com/v2/prices/BTC-EUR/spot")
 MARKET_SECONDS = max(60, int(os.getenv("MARKET_SECONDS", "300")))
@@ -33,8 +39,14 @@ ALLOWED = (
     "uptimeSeconds", "totalUptimeSeconds", "resetReason", "blockFound",
     "overheat_mode", "wifiStatus", "wifiRSSI", "miningPaused",
     "isUsingFallbackStratum", "version", "boardVersion", "fanrpm",
-    "power_fault", "hardware_fault", "sharesRejectedReasons", "smallCoreCount"
+    "power_fault", "hardware_fault", "sharesRejectedReasons", "smallCoreCount",
+    "expectedHashrate", "fanSpeed", "fan2rpm"
 )
+
+INCIDENT_KINDS = {
+    "POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
+    "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE", "UNKNOWN"
+}
 
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Bitaxe Monitor</title>
@@ -42,20 +54,22 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 :root{color-scheme:dark;--bg:#070a0f;--card:#101620;--muted:#8390a3;--text:#f3f6fb;--green:#40e0a0;--yellow:#ffc857;--red:#ff5964;--blue:#57a6ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% -20%,#172638,#070a0f 45%);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1600px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center}.brand{font-size:clamp(23px,3vw,40px);font-weight:800;letter-spacing:.03em}.status{display:flex;gap:9px;align-items:center;color:var(--muted)}.dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 18px currentColor}.dot.ok{background:var(--green)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:20px 0}.card{background:linear-gradient(145deg,#121a25,#0d121a);border:1px solid #202b3a;border-radius:16px;padding:16px;min-width:0;box-shadow:0 10px 35px #0005}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.value{font-size:clamp(22px,2.4vw,38px);font-weight:750;margin-top:7px;white-space:nowrap}.sub{color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis}.wide{grid-column:span 3}.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}.facts.poolfacts{grid-template-columns:repeat(4,1fr)}.fact{background:#0b1119;border-radius:10px;padding:10px}.fact b{display:block;font-size:18px;margin-top:3px}.chart{height:230px;position:relative}.chart canvas{width:100%;height:190px}.dual{height:230px;display:grid;grid-template-rows:1fr 1fr;gap:8px;margin-top:4px}.mini{min-height:0;position:relative}.mini canvas{width:100%;height:94px}.legend{display:flex;gap:16px;align-items:center;color:var(--muted);font-size:12px}.key{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}.key.temp{background:var(--red)}.key.power{background:var(--blue)}.tabs{display:flex;gap:7px}.tabs button{background:#182231;color:#bac5d4;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}.tabs button.active{background:var(--blue);color:#04101d}.events{max-height:310px;overflow:auto}.event{display:grid;grid-template-columns:145px 110px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid #202b3a}.sev-warning{color:var(--yellow)}.sev-critical{color:var(--red)}.sev-info{color:var(--green)}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}.wide{grid-column:span 3}.facts.poolfacts{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.wrap{padding:13px}.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}.facts,.facts.poolfacts{grid-template-columns:1fr}.event{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.chart{height:210px}.dual{height:220px}}
 </style></head><body><main class="wrap"><div class="top"><div><div class="brand">₿ BITAXE GAMMA 601</div><div class="sub" id="ver">AxeOS</div></div><div class="status"><span class="dot" id="dot"></span><b id="state">WARTE AUF DATEN</b><span id="seen"></span></div></div>
 <section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="sub" id="hashSub">—</div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="voltage">—</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
+<div class="card" style="grid-column:1/-1"><div class="label">Health Summary</div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div></div>
 <div class="card wide"><div class="label">Blockwert</div><div class="value" id="blockBtc">— BTC</div><div class="facts"><div class="fact"><span class="sub">1 Bitcoin</span><b id="btcEur">—</b></div><div class="fact"><span class="sub">1 Block (ohne Gebühren)</span><b id="blockEur">—</b></div><div class="fact"><span class="sub">Blockhöhe</span><b id="blockHeight">—</b></div></div></div>
 <div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Hashrate</div><div class="sub">GH/s</div></div><div class="tabs" data-chart="hashrate"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="chart"><canvas id="hashrate"></canvas></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Leistung & Temperatur</div><div class="legend"><span><i class="key temp"></i>Temperatur °C</span><span><i class="key power"></i>Leistung W</span></div></div><div class="tabs" data-chart="thermal"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="dual"><div class="mini"><canvas id="temperature"></canvas></div><div class="mini"><canvas id="powerchart"></canvas></div></div></div>
-<div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div><div class="card wide"><div class="label">Gerätestatus</div><div id="detail" style="line-height:2;margin-top:8px"></div></div></section></main>
+<div class="card wide"><div class="label">Incidents</div><div class="events" id="incidents"></div></div><div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div><div class="card wide"><div class="label">Gerätestatus</div><div id="detail" style="line-height:2;margin-top:8px"></div></div></section></main>
 <script>
 const $=id=>document.getElementById(id), fmt=(v,d=1)=>v==null?'—':Number(v).toFixed(d), dur=s=>{if(s==null)return'—';let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return(d?d+'d ':'')+h+'h '+m+'m'}, diff=v=>{if(v==null)return'—';if(v>=1e12)return(v/1e12).toFixed(2)+'T';if(v>=1e9)return(v/1e9).toFixed(2)+'G';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1e3)return(v/1e3).toFixed(2)+'K';return String(v)};
-async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{};$('dot').className='dot '+(x.online?'ok':'');$('state').textContent=x.online?'ONLINE':'OFFLINE';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hashSub').textContent='1m '+fmt(d.hashRate_1m/1000,2)+' · 1h '+fmt(d.hashRate_1h/1000,2);$('power').textContent=fmt(d.power)+' W';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.current/1000,1)+' A';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff);$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('detail').innerHTML=['Mining: '+(d.miningPaused?'pausiert':'aktiv'),'Overheat: '+(d.overheat_mode?'JA':'nein'),'Reset: '+(d.resetReason||'—'),'Frequenz: '+fmt(d.actualFrequency,0)+' MHz','Core: '+fmt(d.coreVoltageActual,0)+' mV'].map(v=>'<div>'+v+'</div>').join('')}
+async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hashSub').textContent='10m '+fmt(d.hashRate_10m/1000,2)+(d.expectedHashrate?' · Soll '+fmt(d.expectedHashrate/1000,2):'')+' TH/s';$('power').textContent=fmt(d.power)+' W';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('detail').innerHTML=['Mining: '+(d.miningPaused?'pausiert':'aktiv'),'Power Fault: '+(d.power_fault||'nein'),'Reset: '+(d.resetReason||'—'),'Frequenz: '+fmt(d.actualFrequency,0)+' MHz','Core: '+fmt(d.coreVoltageActual,0)+' mV'].map(v=>'<div>'+v+'</div>').join('')}
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
 async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{};$('blockBtc').textContent=x.block_btc==null?'— BTC':Number(x.block_btc).toFixed(4)+' BTC';$('btcEur').textContent=eur(x.btc_eur);$('blockEur').textContent=eur(x.block_eur);$('blockHeight').textContent=x.network?.blocks?.toLocaleString('de-DE')||'—';$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
-function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=42,right=8,top=9,bottom=18;c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.values.filter(v=>v!=null));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';ctx.lineWidth=1;for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=2;ctx.beginPath();let started=false;s.values.forEach((v,i)=>{if(v==null)return;let x=left+i*(w-left-right)/Math.max(1,s.values.length-1),y=top+(max-v)*(h-top-bottom)/(max-min);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()})}
-async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json();draw('hashrate',[{values:x.map(v=>v.hashrate),color:'#40e0a0'}],{unit:'',decimals:0});draw('temperature',[{values:x.map(v=>v.temp),color:'#ff5964'}],{min:40,max:80,unit:'°',decimals:0});draw('powerchart',[{values:x.map(v=>v.power),color:'#57a6ff'}],{min:0,max:40,unit:'W',decimals:0})}
+function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=42,right=8,top=9,bottom=18;c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.values.filter(v=>v!=null));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';ctx.lineWidth=1;for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}(opt.markers||[]).forEach(m=>{let span=Math.max(1,opt.end-opt.start),x1=left+(m.started_at-opt.start)*(w-left-right)/span,x2=left+((m.ended_at||opt.end)-opt.start)*(w-left-right)/span;ctx.fillStyle='#ff596426';ctx.fillRect(Math.max(left,x1),top,Math.max(2,x2-x1),h-top-bottom)});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=2;ctx.beginPath();let started=false;s.values.forEach((v,i)=>{if(v==null)return;let x=left+i*(w-left-right)/Math.max(1,s.values.length-1),y=top+(max-v)*(h-top-bottom)/(max-min);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()})}
+async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json(),s=x.samples||[],o={markers:x.incidents||[],start:s.length?s[0].ts:0,end:s.length?s[s.length-1].ts:1};draw('hashrate',[{values:s.map(v=>v.hashrate),color:'#40e0a0'}],{...o,decimals:0});draw('temperature',[{values:s.map(v=>v.temp),color:'#ff5964'},{values:s.map(v=>v.vr_temp),color:'#ffc857'}],{...o,min:20,max:85,unit:'°',decimals:0});draw('powerchart',[{values:s.map(v=>v.power),color:'#57a6ff'},{values:s.map(v=>v.voltage),color:'#40e0a0'}],{...o,min:0,max:40,decimals:1})}
 async function events(){let r=await fetch('/api/events'),x=await r.json();$('events').innerHTML=x.length?x.map(e=>'<div class="event"><span>'+new Date(e.ts*1000).toLocaleString()+'</span><b class="sev-'+e.severity+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<div class="sub" style="padding-top:12px">Noch keine Ereignisse</div>'}
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});current();market();history();events();setInterval(()=>{current();history(document.querySelector('.tabs button.active').dataset.r);events()},10000);setInterval(market,60000);
+async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{};return '<div class="event"><span>'+new Date(i.started_at*1000).toLocaleString()+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});current();market();history();events();incidents();setInterval(()=>{current();history(document.querySelector('.tabs button.active').dataset.r);events();incidents()},10000);setInterval(market,60000);
 </script></body></html>'''
 
 
@@ -88,7 +102,156 @@ def init_db():
           severity TEXT NOT NULL, message TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
+        CREATE TABLE IF NOT EXISTS incidents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          started_at INTEGER NOT NULL, ended_at INTEGER, status TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'UNKNOWN', severity TEXT NOT NULL DEFAULT 'warning',
+          title TEXT NOT NULL, summary TEXT NOT NULL, observed_cause TEXT,
+          recovery TEXT, facts TEXT NOT NULL DEFAULT '{}',
+          before_sample TEXT, after_sample TEXT, pre_stats TEXT,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_incidents_started ON incidents(started_at DESC);
+        CREATE TABLE IF NOT EXISTS incident_samples (
+          incident_id INTEGER NOT NULL, ts INTEGER NOT NULL, phase TEXT NOT NULL,
+          payload TEXT NOT NULL, PRIMARY KEY(incident_id,ts),
+          FOREIGN KEY(incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS monitor_state (
+          key TEXT PRIMARY KEY, value TEXT NOT NULL
+        );
         """)
+
+
+def calculated_current(data):
+    """Return input current derived from watts and input volts; never guess API units."""
+    power, millivolts = data.get("power"), data.get("voltage")
+    try:
+        volts = float(millivolts) / 1000
+        return float(power) / volts if volts > 0 else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def safe_payload(data):
+    payload = dict(data or {})
+    payload["calculatedCurrent"] = calculated_current(payload)
+    return payload
+
+
+def pre_crash_snapshot(ts, seconds=300):
+    with db() as con:
+        rows = con.execute("SELECT ts,payload FROM samples WHERE ts>=? AND ts<? ORDER BY ts",
+                           (ts - seconds, ts)).fetchall()
+    samples = [safe_payload(json.loads(r["payload"])) | {"ts": r["ts"]} for r in rows]
+    fields = ("hashRate", "hashRate_1m", "hashRate_10m", "hashRate_1h", "power",
+              "voltage", "calculatedCurrent", "temp", "vrTemp", "coreVoltageActual",
+              "actualFrequency", "fanrpm", "fanSpeed", "errorPercentage", "wifiRSSI",
+              "responseTime")
+    stats = {}
+    for field in fields:
+        values = [s[field] for s in samples if isinstance(s.get(field), (int, float))]
+        if values:
+            stats[field] = {"min": min(values), "max": max(values), "avg": sum(values) / len(values)}
+    return samples[-1] if samples else None, stats
+
+
+def create_incident(started_at, kind="UNKNOWN", title="Vorfall erkannt", summary="Ursache nicht eindeutig",
+                    severity="warning", observed=None, facts=None, before_override=None):
+    before, stats = pre_crash_snapshot(started_at)
+    before = before_override or before
+    stamp = now()
+    with db() as con:
+        cur = con.execute("""INSERT INTO incidents
+            (started_at,status,kind,severity,title,summary,observed_cause,facts,before_sample,pre_stats,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (started_at, "ACTIVE", kind, severity, title, summary, observed,
+             json.dumps(facts or {}, separators=(",", ":")),
+             json.dumps(before, separators=(",", ":")) if before else None,
+             json.dumps(stats, separators=(",", ":")), stamp, stamp))
+        incident_id = cur.lastrowid
+        for sample in get_sample_window(started_at - 300, started_at - 1):
+            con.execute("INSERT OR IGNORE INTO incident_samples VALUES(?,?,?,?)",
+                        (incident_id, sample["ts"], "before", json.dumps(sample, separators=(",", ":"))))
+    return incident_id
+
+
+def update_incident(incident_id, **changes):
+    allowed = {"ended_at", "status", "kind", "severity", "title", "summary",
+               "observed_cause", "recovery", "facts", "after_sample"}
+    values, clauses = [], []
+    for key, value in changes.items():
+        if key not in allowed:
+            continue
+        if key in {"facts", "after_sample"} and value is not None:
+            value = json.dumps(value, separators=(",", ":"))
+        clauses.append(f"{key}=?")
+        values.append(value)
+    clauses.append("updated_at=?")
+    values.extend((now(), incident_id))
+    with db() as con:
+        con.execute(f"UPDATE incidents SET {','.join(clauses)} WHERE id=?", values)
+
+
+def attach_incident_sample(incident_id, ts, phase, data):
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO incident_samples VALUES(?,?,?,?)",
+                    (incident_id, ts, phase, json.dumps(safe_payload(data), separators=(",", ":"))))
+
+
+def get_sample_window(start, end):
+    with db() as con:
+        rows = con.execute("SELECT ts,payload FROM samples WHERE ts BETWEEN ? AND ? ORDER BY ts",
+                           (start, end)).fetchall()
+    return [safe_payload(json.loads(r["payload"])) | {"ts": r["ts"]} for r in rows]
+
+
+def backfill_historical_incidents(days=30):
+    """Create evidence-only incidents from existing raw samples once after upgrading."""
+    with db() as con:
+        if con.execute("SELECT 1 FROM monitor_state WHERE key='backfill_v11'").fetchone():
+            return
+        rows = con.execute("SELECT ts,payload FROM samples WHERE ts>=? ORDER BY ts",
+                           (now() - days * 86400,)).fetchall()
+    run = []
+    before = None
+    last_normal = None
+
+    def finish(after=None):
+        nonlocal run, before
+        if len(run) >= STALL_AFTER_POLLS and run[-1]["ts"] - run[0]["ts"] >= POLL_SECONDS * 2:
+            first, last = run[0], run[-1]
+            with db() as con:
+                exists = con.execute("SELECT 1 FROM incidents WHERE started_at BETWEEN ? AND ?",
+                                     (first["ts"] - POLL_SECONDS, first["ts"] + POLL_SECONDS)).fetchone()
+            if not exists:
+                kind, reason = classify_incident(before, first, after or {})
+                incident_id = create_incident(first["ts"], kind, kind.replace("_", " "),
+                                              reason or "Ursache nicht eindeutig", "warning",
+                                              observed_cause(first), {"historical_reconstruction": True}, before)
+                for sample in run:
+                    attach_incident_sample(incident_id, sample["ts"], "during", sample)
+                recovery = "Mining in gespeicherten Messwerten wieder aktiv" if after else "Ende nicht beobachtet"
+                update_incident(incident_id, ended_at=(after or last)["ts"], status="RESOLVED" if after else "UNKNOWN",
+                                recovery=recovery, after_sample=after)
+        run = []
+        before = None
+
+    for row in rows:
+        sample = safe_payload(json.loads(row["payload"])) | {"ts": row["ts"]}
+        stopped = (sample.get("hashRate") or 0) <= 10 and 0 < (sample.get("power") or 0) <= IDLE_POWER_W
+        if stopped:
+            if not run:
+                before = last_normal
+            run.append(sample)
+        else:
+            if run:
+                finish(sample)
+            last_normal = sample
+    if run:
+        finish()
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('backfill_v11',?)", (str(now()),))
 
 
 def add_event(kind, severity, message, ts=None):
@@ -136,6 +299,33 @@ def observed_cause(data):
     return None
 
 
+def classify_incident(before, during, after=None, offline_seconds=0):
+    """Classify only from correlated observations, never from a stale resetReason alone."""
+    before, during, after = before or {}, during or {}, after or {}
+    fault = observed_cause(during) or observed_cause(after)
+    if (during.get("power_fault") or after.get("power_fault")):
+        return "POWER_INTERRUPTION", fault
+    if during.get("overheat_mode") or after.get("overheat_mode"):
+        return "THERMAL_EVENT", fault
+    old_uptime, new_uptime = before.get("uptimeSeconds"), after.get("uptimeSeconds")
+    rebooted = isinstance(old_uptime, (int, float)) and isinstance(new_uptime, (int, float)) and new_uptime + 30 < old_uptime
+    reset = str(after.get("resetReason") or "").lower()
+    hash_stopped = (during.get("hashRate") or 0) <= 10
+    idle_power = 0 < (during.get("power") or 0) <= IDLE_POWER_W
+    uptime_continues = isinstance(old_uptime, (int, float)) and isinstance(during.get("uptimeSeconds"), (int, float)) and during["uptimeSeconds"] >= old_uptime
+    if hash_stopped and idle_power and uptime_continues:
+        return "MINING_STALL", "Controller erreichbar; Hashrate und ASIC-Leistung eingebrochen; Uptime lief weiter"
+    if rebooted and any(word in reset for word in ("power-on", "power on", "brownout")):
+        return "POWER_INTERRUPTION", "Uptime-Reset und neuer Power-on-Resetgrund"
+    if rebooted:
+        return "SOFTWARE_RESTART", "Uptime-Reset zeitgleich mit Neustart"
+    if offline_seconds:
+        return "NETWORK_OR_API_OUTAGE", "API zeitweise nicht erreichbar; kein Uptime-Reset beobachtet"
+    if during.get("isUsingFallbackStratum"):
+        return "POOL_OR_STRATUM_ISSUE", "Fallback-Pool aktiv"
+    return "UNKNOWN", fault
+
+
 def duration_text(seconds):
     minutes, seconds = divmod(max(0, int(seconds)), 60)
     hours, minutes = divmod(minutes, 60)
@@ -146,6 +336,26 @@ def metrics_text(data):
     return (f"{data.get('hashRate') or 0:.0f} GH/s, {data.get('power') or 0:.1f} W, "
             f"{(data.get('voltage') or 0) / 1000:.2f} V, {data.get('temp') or 0:.1f} °C, "
             f"Uptime {duration_text(data.get('uptimeSeconds') or 0)}")
+
+
+def health_summary(state, data, last_incident=None):
+    parts = []
+    if state == "ONLINE":
+        parts.append(f"Mining stabil · {(data.get('hashRate') or 0) / 1000:.2f} TH/s")
+    elif state == "MINING STALLED":
+        parts.append("Mining gestoppt, Controller weiterhin erreichbar")
+    elif state == "OFFLINE":
+        parts.append("AxeOS/API derzeit nicht erreichbar")
+    else:
+        parts.append("Messwerte werden auf Auffälligkeiten geprüft")
+    volts = (data.get("voltage") or 0) / 1000
+    if volts:
+        parts.append(f"Input {volts:.2f} V")
+    parts.append(f"ASIC {data.get('temp') or 0:.0f} °C · VR {data.get('vrTemp') or 0:.0f} °C")
+    parts.append(f"Reject-Rate {data.get('rejectRate') or 0:.2f} %")
+    if last_incident:
+        parts.append("letzter Vorfall vor " + duration_text(now() - last_incident))
+    return " · ".join(parts)
 
 
 def market_poller():
@@ -201,14 +411,16 @@ def detect(old, new):
         ("POWER", (old.get("power") or 0) <= POWER_HIGH < (new.get("power") or 0), "warning", f"Leistung über {POWER_HIGH:g} W"),
         ("TEMPERATURE", (old.get("temp") or 0) <= TEMP_HIGH < (new.get("temp") or 0), "critical", f"Temperatur über {TEMP_HIGH:g} °C"),
         ("FALLBACK_POOL", not bool(old.get("isUsingFallbackStratum")) and bool(new.get("isUsingFallbackStratum")), "warning", "Fallback-Pool aktiv"),
-        ("BLOCK_FOUND", (new.get("blockFound") or 0) > (old.get("blockFound") or 0), "critical", "Block-Fund gemeldet"),
+        ("BLOCK_CANDIDATE", (new.get("blockFound") or 0) > (old.get("blockFound") or 0), "critical", "BLOCK CANDIDATE DETECTED – Bestätigung durch Pool/Netzwerk prüfen"),
         ("OVERHEAT", not bool(old.get("overheat_mode")) and bool(new.get("overheat_mode")), "critical", "Überhitzungsschutz aktiv"),
     ]
     for kind, fired, severity, message in checks:
         if fired:
             add_event(kind, severity, message)
     if (new.get("sharesRejected") or 0) > (old.get("sharesRejected") or 0):
-        add_event("REJECTED_SHARE", "warning", f"Rejected Shares: {old.get('sharesRejected') or 0} → {new.get('sharesRejected')}")
+        reason = new.get("sharesRejectedReasons")
+        suffix = f" · Grund: {reason}" if reason else ""
+        add_event("REJECTED_SHARE", "info", f"Rejected Shares: {old.get('sharesRejected') or 0} → {new.get('sharesRejected')}{suffix}")
 
 
 def save(data, ts):
@@ -227,10 +439,18 @@ def save(data, ts):
 
 def poller():
     global miner_address
-    was_online = None
-    stopped_polls = 0
-    candidate_before = None
-    incident = None
+    failures = successes = stopped_polls = 0
+    state = "ONLINE"
+    incident_id = None
+    incident_start = None
+    incident_before = None
+    incident_during = None
+    offline_since = None
+    with db() as con:
+        active = con.execute("SELECT id,started_at,before_sample FROM incidents WHERE status='ACTIVE' ORDER BY id DESC LIMIT 1").fetchone()
+    if active:
+        incident_id, incident_start = active["id"], active["started_at"]
+        incident_before = json.loads(active["before_sample"]) if active["before_sample"] else previous()
     while True:
         started = time.monotonic()
         try:
@@ -244,57 +464,66 @@ def poller():
             data = clean(raw)
             old = previous()
             detect(old, data)
-            save(data, now())
+            stamp = now()
+            save(data, stamp)
+            failures = 0
+            successes += 1
             hashrate = data.get("hashRate") or 0
             fact = observed_cause(data)
             rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
-            if incident and data.get("power_fault"):
-                incident["cause"] = fact
-            elif incident and fact and not incident["cause"]:
-                incident["cause"] = fact
-            if incident and rebooted:
-                incident["stages"].append("Neustart: " + str(data.get("resetReason") or "unbekannt"))
             stopped = (hashrate <= 10 and not data.get("miningPaused")) or bool(fact)
             if stopped:
                 if stopped_polls == 0:
-                    candidate_before = old
+                    incident_before = old
                 stopped_polls += 1
-                if (stopped_polls == 3 or fact) and incident is None:
-                    started_at = now() if fact else now() - (POLL_SECONDS * 2)
-                    before = candidate_before or old or {}
-                    summary = ("Aktiv: Mining stopped. Letzter Wert vor Vorfall: " +
-                               metrics_text(before) + ". " + (fact or "Ursache unbekannt"))
-                    event_id = add_event("INCIDENT_ACTIVE", "critical", summary, started_at)
-                    incident = {"id": event_id, "start": started_at, "before": before,
-                                "cause": fact, "stages": ["Mining stopped"]}
+                incident_during = data
             else:
-                if incident is not None:
-                    stages = " → ".join(dict.fromkeys(incident["stages"] + ["Mining aktiv"]))
-                    cause = ("Beobachtete Ursache: " + incident["cause"] if incident["cause"]
-                             else "Beobachtete Ursache: keine; mögliche Ursache: unbekannt")
-                    update_event(incident["id"], "INCIDENT", "warning",
-                                 f"{stages}. Dauer {duration_text(now() - incident['start'])}. "
-                                 f"Letzter Wert vor Vorfall: {metrics_text(incident['before'])}. {cause}")
                 stopped_polls = 0
-                candidate_before = None
-                incident = None
-            if was_online is False and incident:
-                incident["stages"].append("Gerät wieder erreichbar")
-            elif was_online is False:
-                add_event("RECOVERED", "info", "Bitaxe wieder erreichbar")
-            was_online = True
+            if incident_id is None and (fact or stopped_polls >= STALL_AFTER_POLLS):
+                incident_start = stamp if fact else stamp - POLL_SECONDS * (STALL_AFTER_POLLS - 1)
+                kind, reason = classify_incident(incident_before, data)
+                incident_id = create_incident(incident_start, kind, kind.replace("_", " "),
+                                              reason or "Ursache nicht eindeutig", "critical" if fact else "warning",
+                                              fact, {"controller_reachable": True, "uptime_reset": False},
+                                              incident_before)
+                successes = 0
+            if incident_id:
+                attach_incident_sample(incident_id, stamp, "during", data)
+                offline_duration = 0 if offline_since is None else stamp - offline_since
+                kind, reason = classify_incident(incident_before, incident_during or data, data if rebooted else {}, offline_duration)
+                facts = {"controller_reachable": True, "uptime_reset": rebooted,
+                         "offline_seconds": offline_duration, "reset_reason": data.get("resetReason") if rebooted else None}
+                update_incident(incident_id, kind=kind, title=kind.replace("_", " "),
+                                summary=reason or "Ursache nicht eindeutig", observed_cause=fact, facts=facts)
+                if not stopped and successes >= RECOVERY_POLLS:
+                    recovery = ("Mining nach Neustart stabil" if rebooted else "Mining wieder stabil")
+                    update_incident(incident_id, ended_at=stamp, status="RESOLVED", recovery=recovery,
+                                    after_sample=safe_payload(data), severity="warning")
+                    add_event("RECOVERED", "info", recovery)
+                    incident_id = incident_start = incident_before = incident_during = offline_since = None
+            if state in {"OFFLINE", "RECOVERING"}:
+                state = "RECOVERING" if successes < RECOVERY_POLLS else "ONLINE"
+            else:
+                state = "DEGRADED" if stopped_polls else "ONLINE"
         except Exception as exc:
-            if incident:
-                if "Gerät nicht erreichbar" not in incident["stages"]:
-                    incident["stages"].append("Gerät nicht erreichbar")
-                    update_event(incident["id"], "INCIDENT_ACTIVE", "critical",
-                                 " → ".join(incident["stages"]) + ". " +
-                                 "Letzter Wert vor Vorfall: " + metrics_text(incident["before"]) + ". " +
-                                 (incident["cause"] or "Ursache unbekannt"))
-            elif was_online is not False:
-                add_event("OFFLINE", "critical", "Bitaxe nicht erreichbar")
-            was_online = False
+            failures += 1
+            successes = 0
+            state = "DEGRADED" if failures < OFFLINE_AFTER_POLLS else "OFFLINE"
+            if failures == OFFLINE_AFTER_POLLS:
+                offline_since = now() - POLL_SECONDS * (OFFLINE_AFTER_POLLS - 1)
+                if incident_id is None:
+                    incident_start = offline_since
+                    incident_before = previous()
+                    incident_id = create_incident(incident_start, "UNKNOWN", "GERÄT NICHT ERREICHBAR",
+                                                  "API seit mehreren Polls nicht erreichbar", "critical",
+                                                  facts={"controller_reachable": False}, before_override=incident_before)
+                add_event("OFFLINE", "critical", "Bitaxe seit mehreren Polls nicht erreichbar")
+            if incident_id:
+                update_incident(incident_id, summary="API nicht erreichbar; Ursache noch nicht eindeutig",
+                                facts={"controller_reachable": False, "failed_polls": failures})
             print("poll failed:", type(exc).__name__, flush=True)
+        with db() as con:
+            con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('health_state',?)", (state,))
         time.sleep(max(1, POLL_SECONDS - (time.monotonic() - started)))
 
 
@@ -328,14 +557,51 @@ class Handler(BaseHTTPRequestHandler):
         if p.path == "/api/current":
             with db() as con:
                 row = con.execute("SELECT ts,payload FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
+                state_row = con.execute("SELECT value FROM monitor_state WHERE key='health_state'").fetchone()
+                last_incident = con.execute("SELECT started_at FROM incidents ORDER BY started_at DESC LIMIT 1").fetchone()
             if not row:
                 return self.send_json({"online": False, "age_seconds": None, "data": {}})
             age = now() - row["ts"]
-            return self.send_json({"online": age < POLL_SECONDS * 3, "age_seconds": age, "data": json.loads(row["payload"])})
+            data = safe_payload(json.loads(row["payload"]))
+            accepted, rejected = data.get("sharesAccepted") or 0, data.get("sharesRejected") or 0
+            data["rejectRate"] = rejected * 100 / max(1, accepted + rejected)
+            expected = data.get("expectedHashrate") or EXPECTED_HASHRATE or None
+            data["expectedHashrate"] = expected
+            state = state_row[0] if state_row else ("ONLINE" if age < POLL_SECONDS * 3 else "OFFLINE")
+            if state == "DEGRADED" and (data.get("hashRate") or 0) <= 10:
+                state = "MINING STALLED"
+            summary = health_summary(state, data, last_incident[0] if last_incident else None)
+            return self.send_json({"online": age < POLL_SECONDS * 3, "state": state,
+                                   "age_seconds": age, "summary": summary, "data": data})
         if p.path == "/api/events":
             with db() as con:
                 rows = con.execute("SELECT ts,kind,severity,message FROM events WHERE kind <> 'HASHRATE' ORDER BY ts DESC LIMIT 100").fetchall()
             return self.send_json([dict(r) for r in rows])
+        if p.path == "/api/incidents":
+            with db() as con:
+                rows = con.execute("SELECT * FROM incidents ORDER BY started_at DESC LIMIT 100").fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                for key in ("facts", "before_sample", "after_sample", "pre_stats"):
+                    item[key] = json.loads(item[key]) if item.get(key) else None
+                result.append(item)
+            return self.send_json(result)
+        if p.path.startswith("/api/incidents/"):
+            try:
+                incident_id = int(p.path.rsplit("/", 1)[1])
+            except ValueError:
+                return self.send_json({"error": "invalid incident"}, 400)
+            with db() as con:
+                row = con.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
+                samples = con.execute("SELECT ts,phase,payload FROM incident_samples WHERE incident_id=? ORDER BY ts", (incident_id,)).fetchall()
+            if not row:
+                return self.send_json({"error": "not found"}, 404)
+            item = dict(row)
+            for key in ("facts", "before_sample", "after_sample", "pre_stats"):
+                item[key] = json.loads(item[key]) if item.get(key) else None
+            item["samples"] = [{"ts": s["ts"], "phase": s["phase"], **json.loads(s["payload"])} for s in samples]
+            return self.send_json(item)
         if p.path == "/api/market":
             with market_lock:
                 payload = dict(market_cache)
@@ -349,14 +615,17 @@ class Handler(BaseHTTPRequestHandler):
             seconds = ranges.get(parse_qs(p.query).get("range", ["1h"])[0], 3600)
             bucket = max(10, seconds // 600)
             with db() as con:
-                rows = con.execute("""SELECT (ts/?)*? ts,AVG(hashrate) hashrate,AVG(power) power,AVG(temp) temp
+                rows = con.execute("""SELECT (ts/?)*? ts,AVG(hashrate) hashrate,AVG(power) power,AVG(temp) temp,
+                    AVG(voltage)/1000.0 voltage,AVG(vr_temp) vr_temp
                     FROM samples WHERE ts>=? GROUP BY (ts/?) ORDER BY ts""", (bucket, bucket, now()-seconds, bucket)).fetchall()
-            return self.send_json([dict(r) for r in rows])
+                markers = con.execute("SELECT id,started_at,ended_at,kind FROM incidents WHERE started_at>=? ORDER BY started_at", (now()-seconds,)).fetchall()
+            return self.send_json({"samples": [dict(r) for r in rows], "incidents": [dict(r) for r in markers]})
         self.send_error(404)
 
 
 if __name__ == "__main__":
     init_db()
+    backfill_historical_incidents()
     threading.Thread(target=poller, daemon=True).start()
     threading.Thread(target=market_poller, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

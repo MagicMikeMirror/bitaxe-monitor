@@ -9,11 +9,15 @@ events without Grafana, InfluxDB or additional containers.
 - 10-second polling with SQLite persistence
 - Current health and mining telemetry
 - 1-hour, 24-hour and 7-day charts
-- Offline, recovery, reboot, power, temperature, low-hashrate, rejected-share,
-  fallback-pool, overheat and block-found events
+- Correlated offline, recovery, restart, power, thermal, pool and mining-stall incidents
+- Informational rejected-share events and cautious block-candidate detection
 - Live BTC/EUR and block-subsidy value
 - Public Pool statistics for the configured miner and its workers
 - Mining-stall incidents with duration, stages and strictly observed causes
+- Persistent flight recorder with five-minute pre-incident snapshots and min/max/average values
+- Correlated incident classification instead of repeated low-hashrate alarms
+- Robust ONLINE / DEGRADED / OFFLINE / RECOVERING state machine
+- Input current calculated from power and input voltage (`I = P / U`)
 - Diagnostic capture of safe AxeOS power and hardware fault fields
 - Responsive dark dashboard for TV, desktop and mobile
 - Single multi-architecture container with no Python dependencies
@@ -63,6 +67,42 @@ Health endpoint: `http://localhost:8787/healthz`
 | `PUBLIC_POOL_API_URL` | `https://public-pool.io:40557/api` | Public Pool API endpoint |
 | `BTC_PRICE_URL` | Coinbase BTC/EUR spot API | BTC/EUR price endpoint |
 | `MARKET_SECONDS` | `300` | Market and Public Pool refresh interval |
+| `OFFLINE_AFTER_POLLS` | `3` | Failed polls required before OFFLINE |
+| `RECOVERY_POLLS` | `3` | Successful polls required before ONLINE |
+| `STALL_AFTER_POLLS` | `3` | Consecutive stopped-mining polls before an incident |
+| `IDLE_POWER_W` | `8` | Upper controller-idle power used for stall correlation |
+| `VOLTAGE_LOW_V` | `4.75` | Low-input-voltage diagnostic threshold |
+| `EXPECTED_HASHRATE_GH` | `0` | Optional expected hashrate; 0 uses AxeOS when available |
+
+## Flight recorder and diagnosis
+
+Version 1.1 stores incidents separately from the unchanged raw sample history. Each
+incident contains its start/end time, observed facts, recovery, last good sample,
+and min/max/average telemetry for the preceding five minutes. A stale AxeOS
+`resetReason` is never treated as a new cause: it is correlated only when the
+monitored uptime actually resets. Direct AxeOS `power_fault` signals take priority.
+
+The classification is an evidence-based diagnostic aid, not an electrical
+measurement instrument. Transient faults can occur between polls; uncertain cases
+remain `UNKNOWN` instead of being presented as facts.
+
+The original AxeOS `current` value is retained in the allow-listed diagnostic
+payload, but the displayed input current is calculated from measured watts and
+input voltage. ESP-Miner v2.15.1 documents `current` as milliamps and AxeOS divides
+it by 1000; calculating `P/U` makes the user-facing value internally consistent.
+See the official [ESP-Miner v2.15.1 API schema](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/main/http_server/openapi.yaml)
+and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/main/http_server/axe-os/src/app/components/home/home.component.ts).
+
+## Updating
+
+Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.1.0`, and
+recreate the container. Startup only adds new SQLite tables; existing samples and
+events are not rewritten or deleted.
+
+## Supported AxeOS versions
+
+The monitor is tested against AxeOS / ESP-Miner v2.15.1. Other recent versions
+using `/api/system/info` may work, but field availability can differ.
 
 ## Development
 
