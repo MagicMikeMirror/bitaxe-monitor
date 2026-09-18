@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4
+
+- Label ASIC temperature, VR temperature, power and input voltage explicitly.
+- Render VR temperature as a dashed yellow line so the red ASIC line remains visible when values overlap.
+
 ## 1.1.3
 
 - Give incident and event types responsive space and prevent labels from overlapping descriptions.
