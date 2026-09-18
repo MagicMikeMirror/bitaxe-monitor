@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+- Display seconds for sub-hour incidents so short restarts never appear as zero-duration events.
+
 ## 1.1.1
 
 - Keep zero-hashrate restart samples inside historical incidents until mining actually resumes.

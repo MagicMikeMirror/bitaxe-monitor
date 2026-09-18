@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.1
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.2
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -50,12 +50,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.1.1"
+  version: "1.1.2"
   update_at: "2026-09-18"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Corrects historical incident recovery boundaries so restart samples with zero hashrate remain part of the incident.
-    de_DE: Korrigiert historische Incident-Grenzen, damit Neustart-Samples mit null Hashrate Teil des Vorfalls bleiben.
+    en_US: Displays exact seconds for short incidents instead of rounding them to zero minutes.
+    de_DE: Zeigt bei kurzen Incidents exakte Sekunden statt einer auf null Minuten gerundeten Dauer.
