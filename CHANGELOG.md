@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.3
+
+- Give incident and event types responsive space and prevent labels from overlapping descriptions.
+- Improve timeline wrapping on desktop and mobile widths.
+
 ## 1.1.2
 
 - Display seconds for sub-hour incidents so short restarts never appear as zero-duration events.
