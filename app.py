@@ -180,7 +180,7 @@ def confirmed_downtime(con, start, end):
     placeholders = ",".join("?" for _ in kinds)
     rows = con.execute(f"""SELECT started_at,COALESCE(ended_at,?) ended_at FROM incidents
         WHERE kind IN ({placeholders}) AND started_at<? AND COALESCE(ended_at,?)>?""",
-        (end, *kinds, end, start)).fetchall()
+        (end, *kinds, end, end, start)).fetchall()
     intervals = [(row["started_at"], row["ended_at"]) for row in rows]
     open_since = None
     for event in con.execute("""SELECT ts,kind FROM events WHERE kind IN ('OFFLINE','RECOVERED')
