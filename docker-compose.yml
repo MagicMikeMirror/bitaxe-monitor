@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.0.5
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.0
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -13,6 +13,12 @@ services:
       PUBLIC_POOL_API_URL: ${PUBLIC_POOL_API_URL:-https://public-pool.io:40557/api}
       BTC_PRICE_URL: ${BTC_PRICE_URL:-https://api.coinbase.com/v2/prices/BTC-EUR/spot}
       MARKET_SECONDS: ${MARKET_SECONDS:-300}
+      OFFLINE_AFTER_POLLS: ${OFFLINE_AFTER_POLLS:-3}
+      RECOVERY_POLLS: ${RECOVERY_POLLS:-3}
+      STALL_AFTER_POLLS: ${STALL_AFTER_POLLS:-3}
+      IDLE_POWER_W: ${IDLE_POWER_W:-8}
+      VOLTAGE_LOW_V: ${VOLTAGE_LOW_V:-4.75}
+      EXPECTED_HASHRATE_GH: ${EXPECTED_HASHRATE_GH:-0}
     ports:
       - "${DASHBOARD_PORT:-8787}:8080"
     volumes:
@@ -44,12 +50,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.0.5"
-  update_at: "2026-09-16"
+  version: "1.1.0"
+  update_at: "2026-09-18"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Records evidence-based incidents, prioritizes AxeOS power/hardware fault signals, and never invents an outage cause.
-    de_DE: Protokolliert evidenzbasierte Vorfälle, priorisiert AxeOS-Power-/Hardware-Faults und erfindet keine Ausfallursache.
+    en_US: Adds a persistent flight recorder, correlated incidents, calculated input current and multi-poll health states.
+    de_DE: Ergänzt einen persistenten Flight Recorder, korrelierte Incidents, berechneten Eingangsstrom und robuste Health-Zustände.
