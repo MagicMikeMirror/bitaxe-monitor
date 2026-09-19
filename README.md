@@ -11,7 +11,7 @@ events without Grafana, InfluxDB or additional containers.
 - 1-hour, 24-hour and 7-day charts
 - Correlated offline, recovery, restart, power, thermal, pool and mining-stall incidents
 - Informational rejected-share events and cautious block-candidate detection
-- Live BTC/EUR and block-subsidy value
+- Live BTC/EUR plus the decoded AxeOS miner coinbase value and transaction fees
 - Compact 24-hour BTC/EUR chart with change, low and high
 - Public Pool statistics for the configured miner and its workers
 - Mining-stall incidents with duration, stages and strictly observed causes
@@ -33,7 +33,9 @@ device IP addresses.
 For the optional Public Pool statistics, the configured mining address is read
 from AxeOS and used only in memory for the pool request. It is never returned by
 the dashboard API, written to SQLite or included in logs. BTC/EUR is refreshed
-from Coinbase and the block subsidy is calculated from the current block height.
+from Coinbase. The miner block value uses AxeOS's decoded coinbase satoshi value;
+the subsidy follows the current block height and is the clearly labelled fallback
+when decoded coinbase data is unavailable.
 
 ## ZimaOS installation
 

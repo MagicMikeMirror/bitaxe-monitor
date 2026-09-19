@@ -15,6 +15,44 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual(APP.block_subsidy(839999), 6.25)
         self.assertEqual(APP.block_subsidy(840000), 3.125)
 
+    def test_coinbase_value_includes_current_transaction_fees(self):
+        value = APP.coinbase_block_value({
+            "coinbaseValueTotalSatoshis": 313727996,
+            "coinbaseValueUserSatoshis": 313727996,
+        }, 967700)
+        self.assertEqual(value["subsidy_btc"], 3.125)
+        self.assertAlmostEqual(value["fees_btc"], 0.01227996, places=8)
+        self.assertAlmostEqual(value["miner_btc"], 3.13727996, places=8)
+
+    def test_coinbase_value_uses_existing_euro_price(self):
+        value = APP.coinbase_block_value({
+            "coinbaseValueTotalSatoshis": 313727996,
+            "coinbaseValueUserSatoshis": 313727996,
+        }, 967700, 70734)
+        self.assertAlmostEqual(value["miner_eur"], 221912.36, places=2)
+
+    def test_missing_coinbase_values_fall_back_to_subsidy(self):
+        value = APP.coinbase_block_value({}, 967700, 70734)
+        self.assertFalse(value["coinbase_available"])
+        self.assertIsNone(value["fees_btc"])
+        self.assertEqual(value["miner_btc"], 3.125)
+
+    def test_user_coinbase_value_is_primary_when_lower_than_total(self):
+        value = APP.coinbase_block_value({
+            "coinbaseValueTotalSatoshis": 313727996,
+            "coinbaseValueUserSatoshis": 310000000,
+        }, 967700)
+        self.assertEqual(value["total_btc"], 3.13727996)
+        self.assertEqual(value["miner_btc"], 3.1)
+
+    def test_coinbase_value_uses_future_halving_subsidy(self):
+        value = APP.coinbase_block_value({
+            "coinbaseValueTotalSatoshis": 157477996,
+            "coinbaseValueUserSatoshis": 157477996,
+        }, 1050000)
+        self.assertEqual(value["subsidy_btc"], 1.5625)
+        self.assertAlmostEqual(value["fees_btc"], 0.01227996, places=8)
+
     def test_market_candles_are_sorted_and_summarized(self):
         candles = [[300, 99, 112, 100, 110, 1], [100, 89, 101, 90, 100, 1],
                    [200, 94, 106, 95, 105, 1], [10, 1, 2, 1, 2, 1]]

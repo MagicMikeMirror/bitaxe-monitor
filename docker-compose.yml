@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.9
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.10
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -51,12 +51,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.1.9"
-  update_at: "2026-09-18"
+  version: "1.1.10"
+  update_at: "2026-09-19"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Fixes incident-aware 24-hour and 7-day hashrate calculation on existing databases.
-    de_DE: Korrigiert die Incident-basierte 24-Stunden- und 7-Tage-Hashrate-Berechnung auf bestehenden Datenbanken.
+    en_US: Shows the current AxeOS miner coinbase value including decoded transaction fees, with a clearly labelled subsidy fallback.
+    de_DE: Zeigt den aktuellen AxeOS-Coinbase-Wert des Miners inklusive dekodierter Transaktionsgebühren und einen klar gekennzeichneten Subventions-Fallback.

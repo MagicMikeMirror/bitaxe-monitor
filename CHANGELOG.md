@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.10
+
+- Use AxeOS decoded coinbase values for the current miner block value.
+- Show transaction fees separately from the halving-based block subsidy.
+- Fall back to a clearly labelled subsidy-only value when coinbase data is unavailable.
+
 ## 1.1.7
 
 - Show the last successful dashboard refresh time beside ONLINE.
