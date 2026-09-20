@@ -166,6 +166,34 @@ class IncidentClassificationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 APP.validate_layout_name(value)
 
+    def test_named_custom_layout_can_be_updated_but_not_created_by_overwrite(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "layouts.sqlite3")
+            try:
+                APP.init_db()
+                first = APP.validate_dashboard_layout([
+                    {"id": widget, "collapsed": False, "hidden": False}
+                    for widget in APP.LAYOUT_WIDGETS])
+                changed = APP.validate_dashboard_layout([
+                    {"id": widget, "collapsed": index == 0, "hidden": index == 1}
+                    for index, widget in enumerate(APP.LAYOUT_WIDGETS)])
+                self.assertTrue(APP.store_dashboard_layout("Andi", first))
+                self.assertTrue(APP.store_dashboard_layout("Andi", changed, overwrite=True))
+                self.assertFalse(APP.store_dashboard_layout("Fehlt", changed, overwrite=True))
+                with APP.db() as con:
+                    saved = json.loads(con.execute(
+                        "SELECT layout_json FROM dashboard_layouts WHERE name='Andi'").fetchone()[0])
+                self.assertTrue(saved[0]["collapsed"])
+                self.assertTrue(saved[1]["hidden"])
+            finally:
+                APP.DB_PATH = original
+
+    def test_layout_ui_offers_update_and_copy_actions(self):
+        self.assertIn('id="layoutUpdate" hidden>Änderungen speichern', APP.HTML)
+        self.assertIn('id="layoutSave" hidden>Als neues Layout speichern', APP.HTML)
+        self.assertIn("overwrite:true", APP.HTML)
+
     def test_mining_profiles_keep_cooling_and_power_settings_together(self):
         expected = {
             "eco": (490, 1100, 65, 1), "standard": (525, 1150, 65, 1),
