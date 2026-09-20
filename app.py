@@ -620,6 +620,10 @@ def set_state_value(key, value):
         con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES(?,?)", (key, str(value)))
 
 
+def auto_restart_enabled():
+    return AUTO_RESTART_ENABLED or state_value("auto_restart_enabled", "false").lower() == "true"
+
+
 def detect(old, new):
     if not old:
         add_event("START", "info", "Monitoring gestartet")
@@ -705,7 +709,7 @@ def poller():
                 degraded_since = None
 
             cooldown_ready = stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
-            if (AUTO_RESTART_ENABLED and not auto_mode and incident_id is None and degradation
+            if (auto_restart_enabled() and not auto_mode and incident_id is None and degradation
                     and degraded_since and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
                     and cooldown_ready):
                 incident_before = old
@@ -868,9 +872,16 @@ class Handler(BaseHTTPRequestHandler):
             if state == "DEGRADED" and (data.get("hashRate") or 0) <= 10:
                 state = "MINING STALLED"
             summary = health_summary(state, data, last_incident[0] if last_incident else None)
+            if auto_restart_enabled():
+                summary += " · Auto-Restart aktiv"
             return self.send_json({"online": age < POLL_SECONDS * 3, "state": state,
-                                   "age_seconds": age, "summary": summary, "data": data,
-                                   "hashrate_history": cached_historical_hashrate()})
+                                    "age_seconds": age, "summary": summary, "data": data,
+                                    "hashrate_history": cached_historical_hashrate(),
+                                    "auto_restart": {"enabled": auto_restart_enabled(),
+                                        "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
+                                        "after_seconds": AUTO_RESTART_AFTER_SECONDS,
+                                        "cooldown_seconds": AUTO_RESTART_COOLDOWN,
+                                        "last_attempt": int(state_value("last_auto_restart", "0") or 0)}})
         if p.path == "/api/events":
             with db() as con:
                 rows = con.execute("SELECT ts,kind,severity,message FROM events WHERE kind <> 'HASHRATE' ORDER BY ts DESC LIMIT 100").fetchall()
@@ -923,6 +934,21 @@ class Handler(BaseHTTPRequestHandler):
                 markers = con.execute("SELECT id,started_at,ended_at,kind FROM incidents WHERE started_at>=? ORDER BY started_at", (now()-seconds,)).fetchall()
             return self.send_json({"samples": [dict(r) for r in rows], "incidents": [dict(r) for r in markers]})
         self.send_error(404)
+
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/settings/auto-restart":
+            return self.send_error(404)
+        try:
+            length = min(1024, int(self.headers.get("Content-Length", "0")))
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self.send_json({"error": "invalid JSON"}, 400)
+        if not isinstance(payload.get("enabled"), bool):
+            return self.send_json({"error": "enabled must be boolean"}, 400)
+        set_state_value("auto_restart_enabled", str(payload["enabled"]).lower())
+        add_event("AUTO_RESTART_SETTING", "info",
+                  "Automatischer Hashrate-Neustart " + ("aktiviert" if payload["enabled"] else "deaktiviert"))
+        return self.send_json({"enabled": auto_restart_enabled()})
 
 
 if __name__ == "__main__":

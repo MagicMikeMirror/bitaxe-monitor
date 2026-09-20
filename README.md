@@ -108,6 +108,11 @@ fallback-pool state is present, and hashrate remains below the configured percen
 for the full delay. Every attempt and its result are persisted as an incident. A
 six-hour cooldown prevents restart loops.
 
+The setting can also be stored persistently in SQLite without changing container
+environment variables: `POST /api/settings/auto-restart` with JSON
+`{"enabled":true}`. The current state is returned by `/api/current` and included
+in the health summary.
+
 The original AxeOS `current` value is retained in the allow-listed diagnostic
 payload, but the displayed input current is calculated from measured watts and
 input voltage. ESP-Miner v2.15.1 documents `current` as milliamps and AxeOS divides
