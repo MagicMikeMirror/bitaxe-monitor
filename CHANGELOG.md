@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+- Allow an existing named custom dashboard layout to be updated in place while keeping the standard layout immutable.
+
 ## 1.3.1
 
 - Apply mining profiles immediately without restarting AxeOS.
