@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- Use true timestamp axes for 1h, 24h and 7d charts, preserving telemetry gaps and adding incident markers.
+- Persist a fresh allow-listed diagnostic snapshot and exact AxeOS domain/register values before every automatic restart.
+- Define the configured 70% threshold as hashrate loss against a stable baseline and retain baseline, minimum, average and duration evidence.
+- Limit automatic recovery to two restart attempts per rolling 60 minutes and expose suppression as an event.
+- Add incident detail views with pre/post telemetry and a strict observed/derived distinction.
+- Keep wallet names, pool credentials, network identifiers and raw API responses out of storage and UI.
+
 ## 1.1.14
 
 - Add an accessible on/off switch for automatic recovery to the device-status card.
