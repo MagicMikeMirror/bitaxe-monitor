@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2
+
+- Calculate 1h, 24h and 7d hashrate averages exclusively from persistent SQLite telemetry.
+- Display exact coverage percentages for every historical average.
+- Record every observed AxeOS uptime reset as a restart marker without splitting history.
+- Add an end-to-end regression test proving that two boot sessions remain in charts, averages and storage.
+
 ## 1.2.1
 
 - Show unavailable legacy pre-restart voltage as an em dash instead of `NaN`.
