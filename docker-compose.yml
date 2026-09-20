@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.2.1
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.2.2
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -57,12 +57,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.2.1"
+  version: "1.2.2"
   update_at: "2026-09-20"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Adds forensic pre-restart snapshots, real-time chart axes, gaps and incident markers.
-    de_DE: Ergänzt forensische Vor-Neustart-Snapshots, echte Zeitachsen, Datenlücken und Incident-Marker.
+    en_US: Keeps 1h, 24h and 7d history continuous across miner and container restarts.
+    de_DE: Hält 1h-, 24h- und 7d-Historie über Miner- und Container-Neustarts hinweg durchgehend.

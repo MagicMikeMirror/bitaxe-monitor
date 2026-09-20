@@ -10,6 +10,7 @@ events without Grafana, InfluxDB or additional containers.
 - Current health and mining telemetry
 - 1-hour, 24-hour and 7-day charts
 - Correlated offline, recovery, restart, power, thermal, pool and mining-stall incidents
+- Restart-proof 1h, 24h and 7d averages calculated from persistent SQLite telemetry
 - Informational rejected-share events and cautious block-candidate detection
 - Live BTC/EUR plus the decoded AxeOS miner coinbase value and transaction fees
 - Compact 24-hour BTC/EUR chart with change, low and high

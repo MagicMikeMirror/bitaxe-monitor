@@ -15,6 +15,53 @@ def samples(start, end, rate=1120, step=10):
 
 
 class TimeWeightedHashrateTests(unittest.TestCase):
+    def test_restart_keeps_both_boot_sessions_in_history_averages_and_markers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path, original_poll, original_now = APP.DB_PATH, APP.POLL_SECONDS, APP.now
+            APP.DB_PATH = str(pathlib.Path(directory) / "restart-history.sqlite3")
+            APP.POLL_SECONDS = 600
+            end = 1_000_000
+            restart_at = end - 6 * 3600
+            try:
+                APP.init_db()
+                for stamp in range(end - 7 * 86400, restart_at, 600):
+                    APP.save({"hashRate": 1000, "uptimeSeconds": stamp - (end - 7 * 86400)}, stamp)
+                before_count = sum(1 for _ in APP.get_sample_window(end - 7 * 86400, restart_at - 1))
+                before = {"hashRate": 1000, "uptimeSeconds": 580000}
+                after = {"hashRate": 1200, "uptimeSeconds": 5,
+                         "resetReason": "Software reset via esp_restart"}
+                APP.now = lambda: restart_at
+                APP.detect(before, after)
+                for stamp in range(restart_at + 60, end, 600):
+                    APP.save({"hashRate": 1200, "uptimeSeconds": stamp - restart_at}, stamp)
+
+                with APP.db() as con:
+                    total_count = con.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+                    old_count = con.execute("SELECT COUNT(*) FROM samples WHERE ts<?", (restart_at,)).fetchone()[0]
+                history_24h = APP.chart_history(end - 86400, end, 144)
+                history_7d = APP.chart_history(end - 604800, end, 1008)
+                summary = APP.historical_hashrate(end)
+                markers = APP.chart_markers(end - 604800, end)
+
+                self.assertEqual(old_count, before_count)
+                self.assertGreater(total_count, before_count)
+                for history in (history_24h, history_7d):
+                    points = [p for p in history if not p.get("gap")]
+                    self.assertLess(points[0]["ts"], restart_at)
+                    self.assertGreater(points[-1]["ts"], restart_at)
+                for label in ("1h", "24h", "7d"):
+                    self.assertIsNotNone(summary[f"avg_{label}"])
+                    self.assertGreater(summary[f"coverage_{label}"], 0)
+                    self.assertGreater(summary[f"coverage_pct_{label}"], 0)
+                self.assertGreater(summary["avg_24h"], 1000)
+                self.assertLess(summary["avg_24h"], 1200)
+                self.assertGreater(summary["avg_7d"], 1000)
+                self.assertLess(summary["avg_7d"], 1200)
+                self.assertTrue(any(marker["kind"] == "REBOOT" and marker["ts"] == restart_at
+                                    for marker in markers))
+            finally:
+                APP.DB_PATH, APP.POLL_SECONDS, APP.now = original_path, original_poll, original_now
+
     def test_chart_history_uses_real_timestamps_and_inserts_gap(self):
         with tempfile.TemporaryDirectory() as directory:
             original = APP.DB_PATH
