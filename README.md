@@ -25,8 +25,8 @@ events without Grafana, InfluxDB or additional containers.
 - Diagnostic capture of safe AxeOS power and hardware fault fields
 - Clickable incident forensics with synchronized telemetry from five minutes before detection through five minutes after recovery
 - BM1370 Error Count and reset-safe delta from the last stable pre-incident sample
-- Immutable standard dashboard layout with drag-and-drop, minimize/hide controls and named SQLite-backed custom layouts
-- Gamma 601 mining profiles: Eco (490/1100/65), Standard (525/1150/65), OC (650/1180/60) and Performance (725/1220/57), always with automatic fan control
+- Immutable standard dashboard layout with drag-and-drop, minimize/hide controls and named SQLite-backed custom layouts that can be updated or copied
+- Gamma 601 mining profiles: Eco (490/1100/65), Standard (525/1150/65), OC (650/1180/60) and Performance (725/1220/57), always with automatic fan control and applied without restarting AxeOS
 - Responsive dark dashboard for TV, desktop and mobile
 - Single multi-architecture container with no Python dependencies
 
@@ -99,6 +99,21 @@ SQLite history as time-weighted production averages. Confirmed downtime counts
 as zero; isolated missed polls do not become artificial outages. Until a full
 window is available, the dashboard labels the actual data coverage.
 
+## Dashboard layouts
+
+The built-in standard layout is immutable. Select **Anpassen** to reorder,
+minimize or hide cards. A named custom layout can be updated directly with
+**Änderungen speichern** or copied with **Als neues Layout speichern**. Layouts
+are stored in the persistent SQLite database.
+
+## Mining profiles
+
+The four Gamma 601 / BM1370 profiles apply frequency, core voltage, automatic
+fan control and target temperature together in one AxeOS request. Profile
+changes take effect without an AxeOS restart and are confirmed from subsequent
+telemetry. OC and Performance use custom values and therefore require an
+explicit warning confirmation in the dashboard.
+
 ## Flight recorder and diagnosis
 
 Version 1.1 stores incidents separately from the unchanged raw sample history. Each
@@ -136,7 +151,7 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.1.0`, and
+Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.3.2`, and
 recreate the container. Startup only adds new SQLite tables; existing samples and
 events are not rewritten or deleted.
 
