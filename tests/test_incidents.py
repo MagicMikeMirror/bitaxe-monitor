@@ -13,6 +13,30 @@ SPEC.loader.exec_module(APP)
 
 
 class IncidentClassificationTests(unittest.TestCase):
+    def test_auto_restart_detects_safe_partial_hashrate_loss(self):
+        original = APP.AUTO_RESTART_MIN_UPTIME
+        APP.AUTO_RESTART_MIN_UPTIME = 900
+        try:
+            evidence = APP.hashrate_degradation({
+                "hashRate": 300, "expectedHashrate": 1224, "uptimeSeconds": 3600,
+                "power": 22.5, "actualFrequency": 600, "miningPaused": False,
+                "isUsingFallbackStratum": False, "overheat_mode": 0,
+            })
+            self.assertAlmostEqual(evidence["threshold"], 856.8)
+        finally:
+            APP.AUTO_RESTART_MIN_UPTIME = original
+
+    def test_auto_restart_refuses_faults_warmup_and_idle_power(self):
+        base = {"hashRate": 300, "expectedHashrate": 1224, "uptimeSeconds": 3600,
+                "power": 22.5, "actualFrequency": 600}
+        for change in ({"power_fault": "fault"}, {"overheat_mode": 1},
+                       {"miningPaused": True}, {"power": 5}, {"uptimeSeconds": 30}):
+            self.assertIsNone(APP.hashrate_degradation(base | change))
+
+    def test_restart_url_is_derived_without_retaining_info_path(self):
+        self.assertEqual(APP.axeos_restart_url("http://192.168.1.131/api/system/info"),
+                         "http://192.168.1.131/api/system/restart")
+
     def test_calculated_current_uses_power_and_input_voltage(self):
         self.assertAlmostEqual(APP.calculated_current({"power": 19.9, "voltage": 5090}), 3.91, places=2)
 

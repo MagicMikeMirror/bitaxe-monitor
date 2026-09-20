@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.11
+
+- Add opt-in automatic AxeOS recovery for sustained partial hashrate degradation.
+- Require normal power/frequency, minimum uptime and no reported fault before acting.
+- Persist the trigger, restart request and recovery result as one incident.
+- Enforce a six-hour cooldown and report unsuccessful recovery without restart loops.
+
 ## 1.1.10
 
 - Use AxeOS decoded coinbase values for the current miner block value.
