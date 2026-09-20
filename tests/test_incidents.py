@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import json
 import pathlib
 import sqlite3
@@ -202,6 +203,19 @@ class IncidentClassificationTests(unittest.TestCase):
         self.assertEqual(captured, {"frequency": 650, "coreVoltage": 1180,
                                    "temptarget": 60, "autofanspeed": 1,
                                    "overclockEnabled": 1})
+
+    def test_profile_ui_and_handler_do_not_restart_axeos(self):
+        self.assertIn("ohne Neustart", APP.HTML)
+        profile_handler = inspect.getsource(APP.Handler.do_POST)
+        profile_section = profile_handler.split('if path == "/api/settings/mining-profile":', 1)[1]
+        profile_section = profile_section.split('if path == "/api/layouts":', 1)[0]
+        self.assertNotIn("request_axeos_restart", profile_section)
+        self.assertIn('"status": "applied"', profile_section)
+
+    def test_hidden_and_collapsed_cards_have_non_empty_view_states(self):
+        self.assertIn(".card[hidden]{display:none!important}", APP.HTML)
+        self.assertIn("card.hidden=card.classList.contains('is-hidden')", APP.HTML)
+        self.assertIn(".card.is-collapsed .widgetbar{display:flex}", APP.HTML)
 
     def test_auto_restart_outcome_retries_once_then_locks(self):
         verify = APP.AUTO_RESTART_VERIFY_SECONDS

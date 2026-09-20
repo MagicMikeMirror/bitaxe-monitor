@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.1
+
+- Apply mining profiles immediately without restarting AxeOS.
+- Remove hidden cards from the dashboard grid and render minimized cards as compact, reopenable rows.
+
 ## 1.3.0
 
 - Show current mining efficiency in J/TH and neutral 24-hour input-voltage min/average/max values.
@@ -10,7 +15,7 @@
 - Add an immutable standard dashboard layout plus named persistent custom layouts.
 - Allow cards to be reordered, minimized and hidden in an explicit edit mode; every saved variation requires a new unique name.
 - Add guarded Gamma 601 mining profiles that atomically pair frequency/voltage with automatic fan control and a temperature target.
-- Verify the complete profile after the required AxeOS restart; custom OC profiles require an explicit warning confirmation.
+- Verify the complete profile from subsequent AxeOS telemetry; custom OC profiles require an explicit warning confirmation.
 
 ## 1.2.4
 
