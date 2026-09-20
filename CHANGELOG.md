@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.12
+
+- Persist the auto-restart opt-in in SQLite for appliances that cannot add environment variables.
+- Expose the active state in the current-status API and health summary.
+
 ## 1.1.11
 
 - Add opt-in automatic AxeOS recovery for sustained partial hashrate degradation.

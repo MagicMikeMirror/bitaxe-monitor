@@ -37,6 +37,19 @@ class IncidentClassificationTests(unittest.TestCase):
         self.assertEqual(APP.axeos_restart_url("http://192.168.1.131/api/system/info"),
                          "http://192.168.1.131/api/system/restart")
 
+    def test_persistent_auto_restart_setting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path, original_env = APP.DB_PATH, APP.AUTO_RESTART_ENABLED
+            APP.DB_PATH = str(pathlib.Path(directory) / "setting.sqlite3")
+            APP.AUTO_RESTART_ENABLED = False
+            try:
+                APP.init_db()
+                self.assertFalse(APP.auto_restart_enabled())
+                APP.set_state_value("auto_restart_enabled", "true")
+                self.assertTrue(APP.auto_restart_enabled())
+            finally:
+                APP.DB_PATH, APP.AUTO_RESTART_ENABLED = original_path, original_env
+
     def test_calculated_current_uses_power_and_input_voltage(self):
         self.assertAlmostEqual(APP.calculated_current({"power": 19.9, "voltage": 5090}), 3.91, places=2)
 
