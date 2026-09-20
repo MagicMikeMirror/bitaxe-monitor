@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.2.3
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.2.4
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -26,6 +26,8 @@ services:
       AUTO_RESTART_MIN_UPTIME_SECONDS: ${AUTO_RESTART_MIN_UPTIME_SECONDS:-900}
       AUTO_RESTART_COOLDOWN_SECONDS: ${AUTO_RESTART_COOLDOWN_SECONDS:-1800}
       AUTO_RESTART_VERIFY_SECONDS: ${AUTO_RESTART_VERIFY_SECONDS:-900}
+      DOMAIN_STALL_POLLS: ${DOMAIN_STALL_POLLS:-3}
+      DOMAIN_STALL_AFTER_SECONDS: ${DOMAIN_STALL_AFTER_SECONDS:-60}
     ports:
       - "${DASHBOARD_PORT:-8787}:8080"
     volumes:
@@ -57,12 +59,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.2.3"
+  version: "1.2.4"
   update_at: "2026-09-20"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Keeps 1h, 24h and 7d history continuous across miner and container restarts.
-    de_DE: Hält 1h-, 24h- und 7d-Historie über Miner- und Container-Neustarts hinweg durchgehend.
+    en_US: Detects stalled ASIC domains and recovers without waiting for noisy hashrate spikes.
+    de_DE: Erkennt ausgefallene ASIC-Domains und reagiert unabhängig von kurzen Hashrate-Spitzen.

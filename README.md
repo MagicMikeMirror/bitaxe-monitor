@@ -84,6 +84,8 @@ Health endpoint: `http://localhost:8787/healthz`
 | `AUTO_RESTART_MIN_UPTIME_SECONDS` | `900` | Never restart during the initial warm-up period |
 | `AUTO_RESTART_COOLDOWN_SECONDS` | `1800` | Re-arm delay after a successful recovery |
 | `AUTO_RESTART_VERIFY_SECONDS` | `900` | Time allowed for recovery after the attempt |
+| `DOMAIN_STALL_POLLS` | `3` | Consecutive polls with at least two stalled ASIC domains before confirming the fault |
+| `DOMAIN_STALL_AFTER_SECONDS` | `60` | Persistent domain-stall duration before guarded restart |
 
 The hashrate card shows the live AxeOS value plus 10-minute and 1-hour AxeOS
 averages. Its 24-hour and 7-day values are calculated from the persistent

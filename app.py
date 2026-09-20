@@ -35,6 +35,8 @@ AUTO_RESTART_MIN_UPTIME = max(60, int(os.getenv("AUTO_RESTART_MIN_UPTIME_SECONDS
 AUTO_RESTART_COOLDOWN = max(300, int(os.getenv("AUTO_RESTART_COOLDOWN_SECONDS", "1800")))
 AUTO_RESTART_VERIFY_SECONDS = max(300, int(os.getenv("AUTO_RESTART_VERIFY_SECONDS", "900")))
 AUTO_RESTART_MAX_ATTEMPTS = 2
+DOMAIN_STALL_POLLS = max(3, int(os.getenv("DOMAIN_STALL_POLLS", "3")))
+DOMAIN_STALL_AFTER_SECONDS = max(30, int(os.getenv("DOMAIN_STALL_AFTER_SECONDS", "60")))
 
 market_cache = {"updated": None, "btc_eur": None, "block_btc": None, "price_history": [],
                 "price_change_pct": None, "price_low": None, "price_high": None,
@@ -471,6 +473,36 @@ def domain_register_paths(data):
     return paths
 
 
+def domain_stall_evidence(data):
+    """Return directly observed stalled domains when acting is otherwise safe."""
+    asics = ((data or {}).get("hashrateMonitor") or {}).get("asics") or []
+    domains = asics[0].get("domains") if asics else None
+    if not isinstance(domains, list) or len(domains) < 4:
+        return None
+    numeric = [float(value) if isinstance(value, (int, float)) else 0.0 for value in domains]
+    stalled = [index for index, value in enumerate(numeric) if value <= 1.0]
+    safe = (
+        len(stalled) >= 2
+        and (data.get("uptimeSeconds") or 0) >= AUTO_RESTART_MIN_UPTIME
+        and (data.get("power") or 0) > IDLE_POWER_W
+        and (data.get("actualFrequency") or 0) > 0
+        and not data.get("miningPaused")
+        and not data.get("isUsingFallbackStratum")
+        and not data.get("overheat_mode")
+        and not data.get("power_fault")
+        and not data.get("hardware_fault")
+    )
+    return {"domains": numeric, "stalled_indexes": stalled,
+            "active_count": len(numeric) - len(stalled)} if safe else None
+
+
+def domains_recovered(data):
+    asics = ((data or {}).get("hashrateMonitor") or {}).get("asics") or []
+    domains = asics[0].get("domains") if asics else None
+    return bool(isinstance(domains, list) and len(domains) >= 4
+                and all(isinstance(value, (int, float)) and value > 1 for value in domains))
+
+
 def diagnostic_snapshot(data):
     observed = safe_payload(clean(data or {}))
     raw_current = observed.get("current")
@@ -867,6 +899,9 @@ def poller():
     degraded_since = None
     degradation_baseline = None
     degradation_values = []
+    domain_stall_since = None
+    domain_stall_polls = 0
+    auto_kind = None
     auto_mode = False
     auto_restart_stamp = 0
     auto_recovery_polls = 0
@@ -881,7 +916,8 @@ def poller():
         incident_id, incident_start = active["id"], active["started_at"]
         incident_before = json.loads(active["before_sample"]) if active["before_sample"] else previous()
         facts = json.loads(active["facts"] or "{}")
-        auto_mode = active["kind"] == "HASHRATE_DEGRADATION" and bool(facts.get("auto_restart"))
+        auto_mode = active["kind"] in {"HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL"} and bool(facts.get("auto_restart"))
+        auto_kind = active["kind"] if auto_mode else None
         auto_restart_stamp = int(facts.get("restart_requested_at") or 0)
         auto_attempt = int(facts.get("attempt") or 1)
         auto_uptime_reset = bool(facts.get("uptime_reset"))
@@ -907,6 +943,19 @@ def poller():
             if degraded_since is None and not auto_mode:
                 degradation_baseline = stable_hashrate_baseline(data, stamp)
             degradation = hashrate_degradation(data, degradation_baseline)
+            observed_domain_stall = domain_stall_evidence(data)
+            if observed_domain_stall and not auto_mode:
+                domain_stall_since = domain_stall_since or stamp
+                domain_stall_polls += 1
+                if domain_stall_polls == DOMAIN_STALL_POLLS:
+                    add_event("ASIC_DOMAIN_STALL_DETECTED", "critical",
+                              f"ASIC-Domain-Stall erkannt: {len(observed_domain_stall['stalled_indexes'])} von "
+                              f"{len(observed_domain_stall['domains'])} Domains ohne Hashrate",
+                              details=observed_domain_stall)
+            elif not auto_mode:
+                domain_stall_since = None
+                domain_stall_polls = 0
+            confirmed_domain_stall = (observed_domain_stall if domain_stall_polls >= DOMAIN_STALL_POLLS else None)
             expected = degradation_baseline or expected_hashrate(data)
             recovery_threshold = expected * 0.80 if expected else 0
             healthy_hashrate = expected > 0 and hashrate >= recovery_threshold
@@ -930,10 +979,13 @@ def poller():
                 degradation_baseline = None
                 degradation_values = []
 
-            cooldown_ready = stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
+            trigger_evidence = confirmed_domain_stall or degradation
+            trigger_since = domain_stall_since if confirmed_domain_stall else degraded_since
+            trigger_after = DOMAIN_STALL_AFTER_SECONDS if confirmed_domain_stall else AUTO_RESTART_AFTER_SECONDS
+            cooldown_ready = bool(confirmed_domain_stall) or stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
             rolling_limit_ready = automatic_restarts_since(stamp - 3600) < AUTO_RESTART_MAX_ATTEMPTS
-            if (auto_restart_enabled() and degradation and degraded_since
-                    and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
+            if (auto_restart_enabled() and trigger_evidence and trigger_since
+                    and stamp - trigger_since >= trigger_after
                     and not rolling_limit_ready and not auto_locked):
                 auto_locked = True
                 set_state_value("auto_restart_locked", "true")
@@ -941,34 +993,40 @@ def poller():
                           "Automatischer Neustart unterdrückt: bereits zwei Versuche in 60 Minuten",
                           details={"window_seconds": 3600, "max_attempts": AUTO_RESTART_MAX_ATTEMPTS})
             if (auto_restart_enabled() and not auto_locked and not auto_mode
-                    and incident_id is None and degradation
-                    and degraded_since and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
+                    and incident_id is None and trigger_evidence
+                    and trigger_since and stamp - trigger_since >= trigger_after
                     and cooldown_ready and rolling_limit_ready):
                 incident_before = old
-                incident_start = degraded_since
+                incident_start = trigger_since
                 auto_restart_stamp = stamp
                 auto_attempt = 1
                 auto_uptime_reset = False
-                facts = {"auto_restart": True, "restart_requested_at": stamp,
-                         "attempt": auto_attempt,
-                         "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
-                         "baseline_gh": degradation["baseline"],
-                         "threshold_gh": degradation["threshold"],
-                         "observed_gh": degradation["hashrate"],
-                         "lowest_gh": min(degradation_values or [hashrate]),
-                         "average_gh": sum(degradation_values or [hashrate]) / len(degradation_values or [hashrate]),
-                         "duration_seconds": stamp - degraded_since}
+                auto_kind = "ASIC_DOMAIN_STALL" if confirmed_domain_stall else "HASHRATE_DEGRADATION"
+                facts = {"auto_restart": True, "restart_requested_at": stamp, "attempt": auto_attempt,
+                         "trigger": auto_kind, "baseline_gh": expected, "observed_gh": hashrate,
+                         "duration_seconds": stamp - trigger_since,
+                         "domains": (confirmed_domain_stall or {}).get("domains"),
+                         "stalled_domain_indexes": (confirmed_domain_stall or {}).get("stalled_indexes")}
+                if degradation:
+                    facts.update({"loss_threshold_pct": AUTO_RESTART_LOSS * 100,
+                                  "threshold_gh": degradation["threshold"],
+                                  "lowest_gh": min(degradation_values or [hashrate]),
+                                  "average_gh": sum(degradation_values or [hashrate]) / len(degradation_values or [hashrate])})
+                summary = (f"Mindestens zwei ASIC-Domains seit {trigger_after} Sekunden ohne Hashrate; automatischer Neustart angefordert"
+                           if confirmed_domain_stall else
+                           f"Hashrate seit {AUTO_RESTART_AFTER_SECONDS // 60} Minuten unter {AUTO_RESTART_LOSS * 100:.0f} % Verlust; automatischer Neustart angefordert")
                 incident_id = create_incident(
-                    incident_start, "HASHRATE_DEGRADATION", "HASHRATE DEGRADATION",
-                    f"Hashrate seit {AUTO_RESTART_AFTER_SECONDS // 60} Minuten unter "
-                    f"{AUTO_RESTART_LOSS * 100:.0f} % Verlust; automatischer Neustart angefordert",
+                    incident_start, auto_kind, auto_kind.replace("_", " "), summary,
                     "warning", facts=facts, before_override=incident_before)
                 attach_incident_sample(incident_id, stamp, "restart", data)
                 set_state_value("last_auto_restart", stamp)
                 last_auto_restart = stamp
                 auto_mode = True
                 auto_recovery_polls = 0
-                details = {"reason": f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert",
+                reason = (f"ASIC-Domain-Stall: Domains {confirmed_domain_stall['stalled_indexes']} ohne Hashrate; AxeOS-Neustart angefordert"
+                          if confirmed_domain_stall else
+                          f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert")
+                details = {"reason": reason,
                            "attempt": auto_attempt, **facts}
                 try:
                     restart_with_persisted_evidence(incident_id, data, details, stamp)
@@ -981,12 +1039,14 @@ def poller():
             if auto_mode:
                 attach_incident_sample(incident_id, stamp, "after_restart", data)
                 expected = degradation_baseline or expected_hashrate(data)
-                recovered = expected > 0 and hashrate >= expected * 0.80
+                recovered = (expected > 0 and hashrate >= expected * 0.80
+                             and (auto_kind != "ASIC_DOMAIN_STALL" or domains_recovered(data)))
                 auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
                 auto_uptime_reset = auto_uptime_reset or rebooted
                 facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
-                         "attempt": auto_attempt, "uptime_reset": auto_uptime_reset,
+                         "attempt": auto_attempt, "uptime_reset": auto_uptime_reset, "trigger": auto_kind,
                          "observed_gh": hashrate,
+                         "domains": list(domain_register_paths(data).values()),
                          "baseline_gh": expected, "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                          "recovery_threshold_gh": expected * 0.80 if expected else None}
                 update_incident(incident_id, facts=facts,
@@ -997,7 +1057,9 @@ def poller():
                 if outcome == "recovered":
                     recovery = f"Hashrate nach automatischem Neustart wieder stabil ({hashrate:.0f} GH/s)"
                     update_incident(incident_id, ended_at=stamp, status="RESOLVED",
-                                    summary="Hashrate-Degradation automatisch durch AxeOS-Neustart behoben",
+                                    summary=("ASIC-Domain-Stall automatisch durch AxeOS-Neustart behoben"
+                                             if auto_kind == "ASIC_DOMAIN_STALL" else
+                                             "Hashrate-Degradation automatisch durch AxeOS-Neustart behoben"),
                                     recovery=recovery,
                                     after_sample=safe_payload(data), severity="warning", facts=facts)
                     add_event("RECOVERED", "info", recovery, incident_id=incident_id,
@@ -1005,6 +1067,9 @@ def poller():
                     incident_id = incident_start = incident_before = incident_during = offline_since = None
                     auto_mode = False
                     degraded_since = None
+                    domain_stall_since = None
+                    domain_stall_polls = 0
+                    auto_kind = None
                     set_state_value("auto_restart_locked", "false")
                 elif outcome == "retry":
                     auto_attempt += 1
@@ -1035,6 +1100,7 @@ def poller():
                     incident_id = incident_start = incident_before = incident_during = offline_since = None
                     auto_mode = False
                     auto_locked = True
+                    auto_kind = None
                     set_state_value("auto_restart_locked", "true")
                     degraded_since = stamp
                 state = "RECOVERING" if auto_mode else ("ONLINE" if recovered else "DEGRADED")
@@ -1128,6 +1194,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"enabled": auto_restart_enabled(),
                                    "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                    "after_seconds": AUTO_RESTART_AFTER_SECONDS,
+                                   "domain_stall_polls": DOMAIN_STALL_POLLS,
+                                   "domain_stall_after_seconds": DOMAIN_STALL_AFTER_SECONDS,
                                    "cooldown_seconds": AUTO_RESTART_COOLDOWN,
                                    "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
                                    "locked": state_value("auto_restart_locked", "false").lower() == "true"})
@@ -1156,6 +1224,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "auto_restart": {"enabled": auto_restart_enabled(),
                                         "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                         "after_seconds": AUTO_RESTART_AFTER_SECONDS,
+                                        "domain_stall_polls": DOMAIN_STALL_POLLS,
+                                        "domain_stall_after_seconds": DOMAIN_STALL_AFTER_SECONDS,
                                         "cooldown_seconds": AUTO_RESTART_COOLDOWN,
                                         "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
                                         "locked": state_value("auto_restart_locked", "false").lower() == "true",
