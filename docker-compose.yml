@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.13
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.1.14
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -57,12 +57,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.1.13"
+  version: "1.1.14"
   update_at: "2026-09-20"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Keeps automatic recovery responsive with a 30-minute re-arm and two verified attempts.
-    de_DE: Hält die automatische Wiederherstellung mit 30 Minuten Reaktivierung und zwei geprüften Versuchen handlungsfähig.
+    en_US: Adds a persistent dashboard switch for guarded automatic AxeOS recovery.
+    de_DE: Ergänzt einen persistenten Dashboard-Schalter für die abgesicherte automatische AxeOS-Wiederherstellung.

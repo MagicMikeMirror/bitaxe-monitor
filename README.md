@@ -115,7 +115,8 @@ future recoveries.
 The setting can also be stored persistently in SQLite without changing container
 environment variables: `POST /api/settings/auto-restart` with JSON
 `{"enabled":true}`. The current state is returned by `/api/current` and included
-in the health summary.
+in the health summary. A switch in the health and device-status card changes the
+same setting directly from the dashboard.
 
 The original AxeOS `current` value is retained in the allow-listed diagnostic
 payload, but the displayed input current is calculated from measured watts and

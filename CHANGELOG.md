@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.14
+
+- Add an accessible on/off switch for automatic recovery to the device-status card.
+- Persist dashboard changes in SQLite and show the active state immediately.
+
 ## 1.1.13
 
 - Re-arm automatic recovery 30 minutes after a successful restart.
