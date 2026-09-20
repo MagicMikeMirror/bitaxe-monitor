@@ -81,7 +81,7 @@ Health endpoint: `http://localhost:8787/healthz`
 | `AUTO_RESTART_THRESHOLD_PCT` | `70` | Percentage of expected hashrate that starts the timer |
 | `AUTO_RESTART_AFTER_SECONDS` | `600` | Continuous degradation required before restart |
 | `AUTO_RESTART_MIN_UPTIME_SECONDS` | `900` | Never restart during the initial warm-up period |
-| `AUTO_RESTART_COOLDOWN_SECONDS` | `21600` | Minimum six-hour interval between attempts |
+| `AUTO_RESTART_COOLDOWN_SECONDS` | `1800` | Re-arm delay after a successful recovery |
 | `AUTO_RESTART_VERIFY_SECONDS` | `900` | Time allowed for recovery after the attempt |
 
 The hashrate card shows the live AxeOS value plus 10-minute and 1-hour AxeOS
@@ -105,8 +105,12 @@ remain `UNKNOWN` instead of being presented as facts.
 Automatic restart is disabled by default. When enabled, it only acts while AxeOS is
 reachable, power and frequency indicate active mining, no fault/overheat/pause or
 fallback-pool state is present, and hashrate remains below the configured percentage
-for the full delay. Every attempt and its result are persisted as an incident. A
-six-hour cooldown prevents restart loops.
+for the full delay. Every attempt and its result are persisted as one incident.
+After a successful recovery the guard is armed again after 30 minutes. If the first
+restart does not recover within 15 minutes, one second attempt is made. Two failed
+attempts lock further automatic restarts until three stable measurements are observed,
+for example after a manual restart. This prevents loops without limiting successful
+future recoveries.
 
 The setting can also be stored persistently in SQLite without changing container
 environment variables: `POST /api/settings/auto-restart` with JSON

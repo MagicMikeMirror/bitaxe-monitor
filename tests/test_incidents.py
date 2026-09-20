@@ -50,6 +50,13 @@ class IncidentClassificationTests(unittest.TestCase):
             finally:
                 APP.DB_PATH, APP.AUTO_RESTART_ENABLED = original_path, original_env
 
+    def test_auto_restart_outcome_retries_once_then_locks(self):
+        verify = APP.AUTO_RESTART_VERIFY_SECONDS
+        self.assertEqual(APP.auto_restart_outcome(1, verify - 1, False), "waiting")
+        self.assertEqual(APP.auto_restart_outcome(1, verify, False), "retry")
+        self.assertEqual(APP.auto_restart_outcome(2, verify, False), "lock")
+        self.assertEqual(APP.auto_restart_outcome(2, verify, True), "recovered")
+
     def test_calculated_current_uses_power_and_input_voltage(self):
         self.assertAlmostEqual(APP.calculated_current({"power": 19.9, "voltage": 5090}), 3.91, places=2)
 

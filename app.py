@@ -31,8 +31,9 @@ AUTO_RESTART_ENABLED = os.getenv("AUTO_RESTART_ENABLED", "false").lower() in {"1
 AUTO_RESTART_THRESHOLD = min(0.95, max(0.10, float(os.getenv("AUTO_RESTART_THRESHOLD_PCT", "70")) / 100))
 AUTO_RESTART_AFTER_SECONDS = max(60, int(os.getenv("AUTO_RESTART_AFTER_SECONDS", "600")))
 AUTO_RESTART_MIN_UPTIME = max(60, int(os.getenv("AUTO_RESTART_MIN_UPTIME_SECONDS", "900")))
-AUTO_RESTART_COOLDOWN = max(3600, int(os.getenv("AUTO_RESTART_COOLDOWN_SECONDS", "21600")))
+AUTO_RESTART_COOLDOWN = max(300, int(os.getenv("AUTO_RESTART_COOLDOWN_SECONDS", "1800")))
 AUTO_RESTART_VERIFY_SECONDS = max(300, int(os.getenv("AUTO_RESTART_VERIFY_SECONDS", "900")))
+AUTO_RESTART_MAX_ATTEMPTS = 2
 
 market_cache = {"updated": None, "btc_eur": None, "block_btc": None, "price_history": [],
                 "price_change_pct": None, "price_low": None, "price_high": None,
@@ -624,6 +625,14 @@ def auto_restart_enabled():
     return AUTO_RESTART_ENABLED or state_value("auto_restart_enabled", "false").lower() == "true"
 
 
+def auto_restart_outcome(attempt, elapsed, recovered):
+    if recovered:
+        return "recovered"
+    if elapsed < AUTO_RESTART_VERIFY_SECONDS:
+        return "waiting"
+    return "retry" if attempt < AUTO_RESTART_MAX_ATTEMPTS else "lock"
+
+
 def detect(old, new):
     if not old:
         add_event("START", "info", "Monitoring gestartet")
@@ -671,7 +680,10 @@ def poller():
     auto_mode = False
     auto_restart_stamp = 0
     auto_recovery_polls = 0
-    auto_failure_reported = False
+    auto_attempt = 0
+    auto_uptime_reset = False
+    auto_locked = state_value("auto_restart_locked", "false").lower() == "true"
+    normal_polls = 0
     last_auto_restart = int(state_value("last_auto_restart", "0") or 0)
     with db() as con:
         active = con.execute("SELECT id,started_at,before_sample,kind,facts FROM incidents WHERE status='ACTIVE' ORDER BY id DESC LIMIT 1").fetchone()
@@ -681,6 +693,8 @@ def poller():
         facts = json.loads(active["facts"] or "{}")
         auto_mode = active["kind"] == "HASHRATE_DEGRADATION" and bool(facts.get("auto_restart"))
         auto_restart_stamp = int(facts.get("restart_requested_at") or 0)
+        auto_attempt = int(facts.get("attempt") or 1)
+        auto_uptime_reset = bool(facts.get("uptime_reset"))
     while True:
         started = time.monotonic()
         try:
@@ -703,19 +717,31 @@ def poller():
             rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
             stopped = (hashrate <= 10 and not data.get("miningPaused")) or bool(fact)
             degradation = hashrate_degradation(data)
+            expected = expected_hashrate(data)
+            healthy_hashrate = expected > 0 and hashrate >= expected * AUTO_RESTART_THRESHOLD
+            normal_polls = normal_polls + 1 if healthy_hashrate and not fact else 0
+            if auto_locked and normal_polls >= RECOVERY_POLLS:
+                auto_locked = False
+                set_state_value("auto_restart_locked", "false")
+                add_event("AUTO_RESTART_REARMED", "info",
+                          "Automatischer Neustart nach stabiler Hashrate wieder freigegeben")
             if degradation and not auto_mode:
                 degraded_since = degraded_since or stamp
             elif not auto_mode:
                 degraded_since = None
 
             cooldown_ready = stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
-            if (auto_restart_enabled() and not auto_mode and incident_id is None and degradation
+            if (auto_restart_enabled() and not auto_locked and not auto_mode
+                    and incident_id is None and degradation
                     and degraded_since and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
                     and cooldown_ready):
                 incident_before = old
                 incident_start = degraded_since
                 auto_restart_stamp = stamp
+                auto_attempt = 1
+                auto_uptime_reset = False
                 facts = {"auto_restart": True, "restart_requested_at": stamp,
+                         "attempt": auto_attempt,
                          "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
                          "threshold_gh": degradation["threshold"],
                          "observed_gh": degradation["hashrate"],
@@ -730,7 +756,6 @@ def poller():
                 last_auto_restart = stamp
                 auto_mode = True
                 auto_recovery_polls = 0
-                auto_failure_reported = False
                 add_event("AUTO_RESTART", "warning",
                           f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert")
                 try:
@@ -744,12 +769,17 @@ def poller():
                 expected = expected_hashrate(data)
                 recovered = expected > 0 and hashrate >= expected * AUTO_RESTART_THRESHOLD
                 auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
+                auto_uptime_reset = auto_uptime_reset or rebooted
                 facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
-                         "uptime_reset": rebooted, "observed_gh": hashrate,
+                         "attempt": auto_attempt, "uptime_reset": auto_uptime_reset,
+                         "observed_gh": hashrate,
                          "expected_gh": expected, "threshold_pct": AUTO_RESTART_THRESHOLD * 100}
                 update_incident(incident_id, facts=facts,
                                 summary="Automatischer AxeOS-Neustart ausgelöst; Wiederherstellung wird geprüft")
-                if auto_recovery_polls >= RECOVERY_POLLS:
+                outcome = auto_restart_outcome(
+                    auto_attempt, stamp - auto_restart_stamp,
+                    auto_recovery_polls >= RECOVERY_POLLS)
+                if outcome == "recovered":
                     recovery = f"Hashrate nach automatischem Neustart wieder stabil ({hashrate:.0f} GH/s)"
                     update_incident(incident_id, ended_at=stamp, status="RESOLVED",
                                     summary="Hashrate-Degradation automatisch durch AxeOS-Neustart behoben",
@@ -759,14 +789,32 @@ def poller():
                     incident_id = incident_start = incident_before = incident_during = offline_since = None
                     auto_mode = False
                     degraded_since = None
-                elif stamp - auto_restart_stamp >= AUTO_RESTART_VERIFY_SECONDS and not auto_failure_reported:
-                    message = "Hashrate hat sich nach dem automatischen Neustart nicht ausreichend erholt"
+                    set_state_value("auto_restart_locked", "false")
+                elif outcome == "retry":
+                    auto_attempt += 1
+                    auto_restart_stamp = stamp
+                    last_auto_restart = stamp
+                    auto_recovery_polls = 0
+                    facts.update({"attempt": auto_attempt, "restart_requested_at": stamp})
+                    set_state_value("last_auto_restart", stamp)
+                    update_incident(incident_id, severity="warning", facts=facts,
+                                    summary="Erster Neustart ohne ausreichende Erholung; zweiter Versuch angefordert")
+                    attach_incident_sample(incident_id, stamp, "retry", data)
+                    add_event("AUTO_RESTART_RETRY", "warning",
+                              "Erster Neustart erfolglos; zweiter und letzter Versuch angefordert")
+                    try:
+                        request_axeos_restart()
+                    except Exception as restart_error:
+                        print("restart retry result:", type(restart_error).__name__, flush=True)
+                elif outcome == "lock":
+                    message = "Hashrate nach zwei automatischen Neustarts nicht erholt; Automatik bis zur nächsten stabilen Erholung gesperrt"
                     update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="critical",
                                     summary=message, recovery=message, after_sample=safe_payload(data), facts=facts)
                     add_event("AUTO_RESTART_FAILED", "critical", message)
                     incident_id = incident_start = incident_before = incident_during = offline_since = None
                     auto_mode = False
-                    auto_failure_reported = True
+                    auto_locked = True
+                    set_state_value("auto_restart_locked", "true")
                     degraded_since = stamp
                 state = "RECOVERING" if auto_mode else ("ONLINE" if recovered else "DEGRADED")
                 with db() as con:
@@ -881,6 +929,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
                                         "after_seconds": AUTO_RESTART_AFTER_SECONDS,
                                         "cooldown_seconds": AUTO_RESTART_COOLDOWN,
+                                        "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
+                                        "locked": state_value("auto_restart_locked", "false").lower() == "true",
                                         "last_attempt": int(state_value("last_auto_restart", "0") or 0)}})
         if p.path == "/api/events":
             with db() as con:

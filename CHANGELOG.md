@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.13
+
+- Re-arm automatic recovery 30 minutes after a successful restart.
+- Make one second restart attempt when the first does not recover within 15 minutes.
+- Lock only after two consecutive failed attempts and automatically unlock after stable recovery.
+
 ## 1.1.12
 
 - Persist the auto-restart opt-in in SQLite for appliances that cannot add environment variables.
