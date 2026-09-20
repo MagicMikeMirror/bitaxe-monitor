@@ -77,6 +77,12 @@ Health endpoint: `http://localhost:8787/healthz`
 | `IDLE_POWER_W` | `8` | Upper controller-idle power used for stall correlation |
 | `VOLTAGE_LOW_V` | `4.75` | Low-input-voltage diagnostic threshold |
 | `EXPECTED_HASHRATE_GH` | `0` | Optional expected hashrate; 0 uses AxeOS when available |
+| `AUTO_RESTART_ENABLED` | `false` | Restart AxeOS after sustained partial hashrate loss |
+| `AUTO_RESTART_THRESHOLD_PCT` | `70` | Percentage of expected hashrate that starts the timer |
+| `AUTO_RESTART_AFTER_SECONDS` | `600` | Continuous degradation required before restart |
+| `AUTO_RESTART_MIN_UPTIME_SECONDS` | `900` | Never restart during the initial warm-up period |
+| `AUTO_RESTART_COOLDOWN_SECONDS` | `21600` | Minimum six-hour interval between attempts |
+| `AUTO_RESTART_VERIFY_SECONDS` | `900` | Time allowed for recovery after the attempt |
 
 The hashrate card shows the live AxeOS value plus 10-minute and 1-hour AxeOS
 averages. Its 24-hour and 7-day values are calculated from the persistent
@@ -95,6 +101,12 @@ monitored uptime actually resets. Direct AxeOS `power_fault` signals take priori
 The classification is an evidence-based diagnostic aid, not an electrical
 measurement instrument. Transient faults can occur between polls; uncertain cases
 remain `UNKNOWN` instead of being presented as facts.
+
+Automatic restart is disabled by default. When enabled, it only acts while AxeOS is
+reachable, power and frequency indicate active mining, no fault/overheat/pause or
+fallback-pool state is present, and hashrate remains below the configured percentage
+for the full delay. Every attempt and its result are persisted as an incident. A
+six-hour cooldown prevents restart loops.
 
 The original AxeOS `current` value is retained in the allow-listed diagnostic
 payload, but the displayed input current is calculated from measured watts and

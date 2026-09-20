@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse, urlunparse
 
 
 API_URL = os.getenv("BITAXE_API_URL", "http://192.168.1.100/api/system/info")
@@ -27,6 +27,12 @@ PUBLIC_POOL_API_URL = os.getenv("PUBLIC_POOL_API_URL", "https://public-pool.io:4
 BTC_PRICE_URL = os.getenv("BTC_PRICE_URL", "https://api.coinbase.com/v2/prices/BTC-EUR/spot")
 BTC_HISTORY_URL = os.getenv("BTC_HISTORY_URL", "https://api.exchange.coinbase.com/products/BTC-EUR/candles?granularity=3600")
 MARKET_SECONDS = max(60, int(os.getenv("MARKET_SECONDS", "300")))
+AUTO_RESTART_ENABLED = os.getenv("AUTO_RESTART_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+AUTO_RESTART_THRESHOLD = min(0.95, max(0.10, float(os.getenv("AUTO_RESTART_THRESHOLD_PCT", "70")) / 100))
+AUTO_RESTART_AFTER_SECONDS = max(60, int(os.getenv("AUTO_RESTART_AFTER_SECONDS", "600")))
+AUTO_RESTART_MIN_UPTIME = max(60, int(os.getenv("AUTO_RESTART_MIN_UPTIME_SECONDS", "900")))
+AUTO_RESTART_COOLDOWN = max(3600, int(os.getenv("AUTO_RESTART_COOLDOWN_SECONDS", "21600")))
+AUTO_RESTART_VERIFY_SECONDS = max(300, int(os.getenv("AUTO_RESTART_VERIFY_SECONDS", "900")))
 
 market_cache = {"updated": None, "btc_eur": None, "block_btc": None, "price_history": [],
                 "price_change_pct": None, "price_low": None, "price_high": None,
@@ -51,7 +57,8 @@ ALLOWED = (
 
 INCIDENT_KINDS = {
     "POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
-    "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE", "UNKNOWN"
+    "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE",
+    "HASHRATE_DEGRADATION", "UNKNOWN"
 }
 
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
@@ -561,6 +568,58 @@ def previous():
     return json.loads(row[0]) if row else None
 
 
+def expected_hashrate(data):
+    value = EXPECTED_HASHRATE or (data or {}).get("expectedHashrate") or 0
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def hashrate_degradation(data):
+    """Return evidence for sustained partial mining loss, or None when restart is unsafe."""
+    data = data or {}
+    expected = expected_hashrate(data)
+    threshold = expected * AUTO_RESTART_THRESHOLD
+    rate = float(data.get("hashRate") or 0)
+    safe = (
+        expected > 0 and rate < threshold
+        and (data.get("uptimeSeconds") or 0) >= AUTO_RESTART_MIN_UPTIME
+        and (data.get("power") or 0) > IDLE_POWER_W
+        and (data.get("actualFrequency") or 0) > 0
+        and not data.get("miningPaused")
+        and not data.get("isUsingFallbackStratum")
+        and not data.get("overheat_mode")
+        and not data.get("power_fault")
+        and not data.get("hardware_fault")
+    )
+    return {"hashrate": rate, "expected": expected, "threshold": threshold} if safe else None
+
+
+def axeos_restart_url(api_url=API_URL):
+    parsed = urlparse(api_url)
+    return urlunparse((parsed.scheme, parsed.netloc, "/api/system/restart", "", "", ""))
+
+
+def request_axeos_restart():
+    req = urllib.request.Request(
+        axeos_restart_url(), data=b"", method="POST",
+        headers={"Accept": "application/json", "User-Agent": "BitaxeMonitor/1.0"})
+    with urllib.request.urlopen(req, timeout=6) as response:
+        return response.status
+
+
+def state_value(key, default=None):
+    with db() as con:
+        row = con.execute("SELECT value FROM monitor_state WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
+def set_state_value(key, value):
+    with db() as con:
+        con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES(?,?)", (key, str(value)))
+
+
 def detect(old, new):
     if not old:
         add_event("START", "info", "Monitoring gestartet")
@@ -604,11 +663,20 @@ def poller():
     incident_before = None
     incident_during = None
     offline_since = None
+    degraded_since = None
+    auto_mode = False
+    auto_restart_stamp = 0
+    auto_recovery_polls = 0
+    auto_failure_reported = False
+    last_auto_restart = int(state_value("last_auto_restart", "0") or 0)
     with db() as con:
-        active = con.execute("SELECT id,started_at,before_sample FROM incidents WHERE status='ACTIVE' ORDER BY id DESC LIMIT 1").fetchone()
+        active = con.execute("SELECT id,started_at,before_sample,kind,facts FROM incidents WHERE status='ACTIVE' ORDER BY id DESC LIMIT 1").fetchone()
     if active:
         incident_id, incident_start = active["id"], active["started_at"]
         incident_before = json.loads(active["before_sample"]) if active["before_sample"] else previous()
+        facts = json.loads(active["facts"] or "{}")
+        auto_mode = active["kind"] == "HASHRATE_DEGRADATION" and bool(facts.get("auto_restart"))
+        auto_restart_stamp = int(facts.get("restart_requested_at") or 0)
     while True:
         started = time.monotonic()
         try:
@@ -630,6 +698,77 @@ def poller():
             fact = observed_cause(data)
             rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
             stopped = (hashrate <= 10 and not data.get("miningPaused")) or bool(fact)
+            degradation = hashrate_degradation(data)
+            if degradation and not auto_mode:
+                degraded_since = degraded_since or stamp
+            elif not auto_mode:
+                degraded_since = None
+
+            cooldown_ready = stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
+            if (AUTO_RESTART_ENABLED and not auto_mode and incident_id is None and degradation
+                    and degraded_since and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
+                    and cooldown_ready):
+                incident_before = old
+                incident_start = degraded_since
+                auto_restart_stamp = stamp
+                facts = {"auto_restart": True, "restart_requested_at": stamp,
+                         "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
+                         "threshold_gh": degradation["threshold"],
+                         "observed_gh": degradation["hashrate"],
+                         "expected_gh": degradation["expected"]}
+                incident_id = create_incident(
+                    incident_start, "HASHRATE_DEGRADATION", "HASHRATE DEGRADATION",
+                    f"Hashrate seit {AUTO_RESTART_AFTER_SECONDS // 60} Minuten unter "
+                    f"{AUTO_RESTART_THRESHOLD * 100:.0f} %; automatischer Neustart angefordert",
+                    "warning", facts=facts, before_override=incident_before)
+                attach_incident_sample(incident_id, stamp, "restart", data)
+                set_state_value("last_auto_restart", stamp)
+                last_auto_restart = stamp
+                auto_mode = True
+                auto_recovery_polls = 0
+                auto_failure_reported = False
+                add_event("AUTO_RESTART", "warning",
+                          f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert")
+                try:
+                    request_axeos_restart()
+                except Exception as restart_error:
+                    # AxeOS may close the socket while rebooting; verification is telemetry-based.
+                    print("restart request result:", type(restart_error).__name__, flush=True)
+
+            if auto_mode:
+                attach_incident_sample(incident_id, stamp, "after_restart", data)
+                expected = expected_hashrate(data)
+                recovered = expected > 0 and hashrate >= expected * AUTO_RESTART_THRESHOLD
+                auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
+                facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
+                         "uptime_reset": rebooted, "observed_gh": hashrate,
+                         "expected_gh": expected, "threshold_pct": AUTO_RESTART_THRESHOLD * 100}
+                update_incident(incident_id, facts=facts,
+                                summary="Automatischer AxeOS-Neustart ausgelöst; Wiederherstellung wird geprüft")
+                if auto_recovery_polls >= RECOVERY_POLLS:
+                    recovery = f"Hashrate nach automatischem Neustart wieder stabil ({hashrate:.0f} GH/s)"
+                    update_incident(incident_id, ended_at=stamp, status="RESOLVED",
+                                    summary="Hashrate-Degradation automatisch durch AxeOS-Neustart behoben",
+                                    recovery=recovery,
+                                    after_sample=safe_payload(data), severity="warning", facts=facts)
+                    add_event("AUTO_RESTART_RECOVERED", "info", recovery)
+                    incident_id = incident_start = incident_before = incident_during = offline_since = None
+                    auto_mode = False
+                    degraded_since = None
+                elif stamp - auto_restart_stamp >= AUTO_RESTART_VERIFY_SECONDS and not auto_failure_reported:
+                    message = "Hashrate hat sich nach dem automatischen Neustart nicht ausreichend erholt"
+                    update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="critical",
+                                    summary=message, recovery=message, after_sample=safe_payload(data), facts=facts)
+                    add_event("AUTO_RESTART_FAILED", "critical", message)
+                    incident_id = incident_start = incident_before = incident_during = offline_since = None
+                    auto_mode = False
+                    auto_failure_reported = True
+                    degraded_since = stamp
+                state = "RECOVERING" if auto_mode else ("ONLINE" if recovered else "DEGRADED")
+                with db() as con:
+                    con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('health_state',?)", (state,))
+                time.sleep(max(1, POLL_SECONDS - (time.monotonic() - started)))
+                continue
             if stopped:
                 if stopped_polls == 0:
                     incident_before = old
@@ -667,7 +806,7 @@ def poller():
             failures += 1
             successes = 0
             state = "DEGRADED" if failures < OFFLINE_AFTER_POLLS else "OFFLINE"
-            if failures == OFFLINE_AFTER_POLLS:
+            if failures == OFFLINE_AFTER_POLLS and not auto_mode:
                 offline_since = now() - POLL_SECONDS * (OFFLINE_AFTER_POLLS - 1)
                 if incident_id is None:
                     incident_start = offline_since
@@ -676,7 +815,7 @@ def poller():
                                                   "API seit mehreren Polls nicht erreichbar", "critical",
                                                   facts={"controller_reachable": False}, before_override=incident_before)
                 add_event("OFFLINE", "critical", "Bitaxe seit mehreren Polls nicht erreichbar")
-            if incident_id:
+            if incident_id and not auto_mode:
                 update_incident(incident_id, summary="API nicht erreichbar; Ursache noch nicht eindeutig",
                                 facts={"controller_reachable": False, "failed_polls": failures})
             print("poll failed:", type(exc).__name__, flush=True)
