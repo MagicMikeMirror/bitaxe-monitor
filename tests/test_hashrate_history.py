@@ -15,6 +15,22 @@ def samples(start, end, rate=1120, step=10):
 
 
 class TimeWeightedHashrateTests(unittest.TestCase):
+    def test_chart_history_uses_real_timestamps_and_inserts_gap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "chart.sqlite3")
+            try:
+                APP.init_db()
+                APP.save({"hashRate": 0, "power": 5}, 1000)
+                APP.save({"hashRate": 5, "power": 6}, 1010)
+                APP.save({"hashRate": 900, "power": 20}, 1100)
+                history = APP.chart_history(900, 1200, 10)
+                self.assertEqual([p["hashrate"] for p in history if not p.get("gap")][:2], [0, 5])
+                self.assertTrue(any(p.get("gap") for p in history))
+                self.assertEqual(history[-1]["ts"], 1100)
+            finally:
+                APP.DB_PATH = original
+
     def test_a_continuous_24h_is_full_rate(self):
         end = 86400
         value = APP.time_weighted_hashrate(samples(0, end), 0, end)

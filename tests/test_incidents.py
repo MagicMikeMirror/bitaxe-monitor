@@ -22,7 +22,8 @@ class IncidentClassificationTests(unittest.TestCase):
                 "power": 22.5, "actualFrequency": 600, "miningPaused": False,
                 "isUsingFallbackStratum": False, "overheat_mode": 0,
             })
-            self.assertAlmostEqual(evidence["threshold"], 856.8)
+            self.assertAlmostEqual(evidence["threshold"], 367.2)
+            self.assertAlmostEqual(evidence["loss_pct"], 75.49, places=1)
         finally:
             APP.AUTO_RESTART_MIN_UPTIME = original
 
@@ -50,12 +51,57 @@ class IncidentClassificationTests(unittest.TestCase):
             finally:
                 APP.DB_PATH, APP.AUTO_RESTART_ENABLED = original_path, original_env
 
+    def test_existing_database_migrates_without_losing_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "legacy.sqlite3")
+            try:
+                with sqlite3.connect(APP.DB_PATH) as con:
+                    con.execute("CREATE TABLE events(id INTEGER PRIMARY KEY,ts INTEGER,kind TEXT,severity TEXT,message TEXT)")
+                    con.execute("INSERT INTO events VALUES(1,100,'START','info','old event')")
+                APP.init_db()
+                with APP.db() as con:
+                    columns = {row[1] for row in con.execute("PRAGMA table_info(events)")}
+                    message = con.execute("SELECT message FROM events WHERE id=1").fetchone()[0]
+                    diagnostics = con.execute("SELECT name FROM sqlite_master WHERE name='incident_diagnostics'").fetchone()
+                self.assertTrue({"incident_id", "automatic", "details"}.issubset(columns))
+                self.assertEqual(message, "old event")
+                self.assertIsNotNone(diagnostics)
+            finally:
+                APP.DB_PATH = original
+
     def test_auto_restart_outcome_retries_once_then_locks(self):
         verify = APP.AUTO_RESTART_VERIFY_SECONDS
         self.assertEqual(APP.auto_restart_outcome(1, verify - 1, False), "waiting")
         self.assertEqual(APP.auto_restart_outcome(1, verify, False), "retry")
         self.assertEqual(APP.auto_restart_outcome(2, verify, False), "lock")
         self.assertEqual(APP.auto_restart_outcome(2, verify, True), "recovered")
+
+    def test_domain_values_are_kept_with_exact_paths_and_not_summed(self):
+        data = APP.clean({"hashrateMonitor": {"asics": [{"total": 1245.5,
+            "domains": [296.3, 328.5, 315.6, 287.7]}]}})
+        paths = APP.domain_register_paths(data)
+        self.assertEqual(paths["hashrateMonitor.asics[0].domains[3]"], 287.7)
+        self.assertNotIn("sum", APP.diagnostic_snapshot(data)["derived"])
+
+    def test_snapshot_and_event_commit_before_restart_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_path, original_fetch, original_restart = APP.DB_PATH, APP.fetch_bitaxe_info, APP.request_axeos_restart
+            APP.DB_PATH = str(pathlib.Path(directory) / "forensics.sqlite3")
+            APP.init_db()
+            incident_id = APP.create_incident(100, "HASHRATE_DEGRADATION")
+            order = []
+            APP.fetch_bitaxe_info = lambda: {"hashRate": 300, "hashrateMonitor": {"asics": [{"domains": [1,2,3,4]}]}}
+            def restart():
+                with APP.db() as con:
+                    order.append(con.execute("SELECT COUNT(*) FROM incident_diagnostics").fetchone()[0])
+                    order.append(con.execute("SELECT COUNT(*) FROM events WHERE kind='AUTO_RECOVERY_RESTART'").fetchone()[0])
+            APP.request_axeos_restart = restart
+            try:
+                APP.restart_with_persisted_evidence(incident_id, {}, {"reason": "test", "attempt": 1}, 200)
+                self.assertEqual(order, [1, 1])
+            finally:
+                APP.DB_PATH, APP.fetch_bitaxe_info, APP.request_axeos_restart = original_path, original_fetch, original_restart
 
     def test_calculated_current_uses_power_and_input_voltage(self):
         self.assertAlmostEqual(APP.calculated_current({"power": 19.9, "voltage": 5090}), 3.91, places=2)

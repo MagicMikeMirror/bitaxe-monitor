@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+import statistics
 import threading
 import time
 import urllib.error
@@ -28,7 +29,7 @@ BTC_PRICE_URL = os.getenv("BTC_PRICE_URL", "https://api.coinbase.com/v2/prices/B
 BTC_HISTORY_URL = os.getenv("BTC_HISTORY_URL", "https://api.exchange.coinbase.com/products/BTC-EUR/candles?granularity=3600")
 MARKET_SECONDS = max(60, int(os.getenv("MARKET_SECONDS", "300")))
 AUTO_RESTART_ENABLED = os.getenv("AUTO_RESTART_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
-AUTO_RESTART_THRESHOLD = min(0.95, max(0.10, float(os.getenv("AUTO_RESTART_THRESHOLD_PCT", "70")) / 100))
+AUTO_RESTART_LOSS = min(0.95, max(0.10, float(os.getenv("AUTO_RESTART_THRESHOLD_PCT", "70")) / 100))
 AUTO_RESTART_AFTER_SECONDS = max(60, int(os.getenv("AUTO_RESTART_AFTER_SECONDS", "600")))
 AUTO_RESTART_MIN_UPTIME = max(60, int(os.getenv("AUTO_RESTART_MIN_UPTIME_SECONDS", "900")))
 AUTO_RESTART_COOLDOWN = max(300, int(os.getenv("AUTO_RESTART_COOLDOWN_SECONDS", "1800")))
@@ -53,7 +54,13 @@ ALLOWED = (
     "isUsingFallbackStratum", "version", "boardVersion", "fanrpm",
     "power_fault", "hardware_fault", "sharesRejectedReasons", "smallCoreCount",
     "expectedHashrate", "fanSpeed", "fan2rpm", "blockHeight",
-    "coinbaseValueTotalSatoshis", "coinbaseValueUserSatoshis"
+    "coinbaseValueTotalSatoshis", "coinbaseValueUserSatoshis",
+    "ASICModel", "axeOSVersion", "idfVersion", "frequency", "coreVoltage",
+    "overclockEnabled", "temptarget", "fanspeed", "autofanspeed",
+    "manualFanSpeed", "stratumProtocol", "fallbackStratumProtocol",
+    "primaryPoolIndex", "secondaryPoolIndex", "workReceived", "sharesPending",
+    "blockSignals", "cpuUsage", "hostname", "hashrateMonitor",
+    "totalHashes", "totalLog2Work", "processTime"
 )
 
 INCIDENT_KINDS = {
@@ -68,6 +75,7 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 :root{color-scheme:dark;--bg:#070a0f;--card:#101620;--muted:#8390a3;--text:#f3f6fb;--green:#40e0a0;--yellow:#ffc857;--red:#ff5964;--blue:#57a6ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% -20%,#172638,#070a0f 45%);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1600px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center}.brand{font-size:clamp(23px,3vw,40px);font-weight:800;letter-spacing:.03em}.status{display:flex;gap:9px;align-items:center;color:var(--muted)}.dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 18px currentColor}.dot.ok{background:var(--green)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:20px 0}.card{background:linear-gradient(145deg,#121a25,#0d121a);border:1px solid #202b3a;border-radius:16px;padding:16px;min-width:0;box-shadow:0 10px 35px #0005}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.value{font-size:clamp(22px,2.4vw,38px);font-weight:750;margin-top:7px;white-space:nowrap}.sub{color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis}.hashstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:9px}.hashstat{min-width:0;color:var(--muted);font-size:10px;text-transform:uppercase}.hashstat b{display:block;color:#dce5f1;font-size:13px;line-height:1.2;white-space:nowrap}.hashstat small{display:block;color:var(--muted);font-size:9px;white-space:nowrap}.wide{grid-column:span 3}.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}.facts.poolfacts{grid-template-columns:repeat(4,1fr)}.fact{background:#0b1119;border-radius:10px;padding:10px}.fact b{display:block;font-size:18px;margin-top:3px}.healthdetails{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px;padding-top:11px;border-top:1px solid #202b3a;color:#bac5d4;font-size:13px}.healthdetails b{color:var(--text);font-weight:650}.pricechart{height:105px;margin:9px 0 2px}.pricechart canvas{width:100%;height:105px}.pricechange{font-weight:700}.pricechange.up{color:var(--green)}.pricechange.down{color:var(--red)}.chart{height:230px;position:relative}.chart canvas{width:100%;height:190px}.dual{height:230px;display:grid;grid-template-rows:1fr 1fr;gap:8px;margin-top:4px}.mini{min-height:0;position:relative}.mini canvas{width:100%;height:94px}.legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;color:var(--muted);font-size:12px}.key{display:inline-block;width:18px;height:3px;border-radius:2px;margin:0 6px 3px 0;vertical-align:middle}.key.asic{background:var(--red)}.key.vr{height:0;border-top:3px dashed var(--yellow)}.key.power{background:var(--blue)}.key.voltage{background:var(--green)}.tabs{display:flex;gap:7px}.tabs button{background:#182231;color:#bac5d4;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}.tabs button.active{background:var(--blue);color:#04101d}.events{max-height:310px;overflow:auto}.event{display:grid;grid-template-columns:145px minmax(155px,190px) minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid #202b3a;align-items:start}.event>*{min-width:0}.event>b{white-space:nowrap}.event>span:last-child{overflow-wrap:anywhere;line-height:1.45}.sev-warning{color:var(--yellow)}.sev-critical{color:var(--red)}.sev-info{color:var(--green)}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}.wide{grid-column:span 3}.facts.poolfacts{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.wrap{padding:13px}.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}.facts,.facts.poolfacts{grid-template-columns:1fr}.hashstats{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:8px}.event{grid-template-columns:1fr;gap:4px}.event>b{white-space:normal}.top{align-items:flex-start;flex-direction:column}.chart{height:210px}.dual{height:220px}}
 .status{flex-wrap:wrap;justify-content:flex-end}.refresh{font-variant-numeric:tabular-nums;white-space:nowrap}
 .healthhead{display:flex;align-items:center;justify-content:space-between;gap:16px}.autoswitch{display:inline-flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}.autoswitch input{position:absolute;opacity:0;pointer-events:none}.switchtrack{width:42px;height:24px;border-radius:14px;background:#273343;border:1px solid #39485c;position:relative;transition:.2s}.switchtrack:after{content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;border-radius:50%;background:#9aa7b8;transition:.2s}.autoswitch input:checked+.switchtrack{background:#176c51;border-color:var(--green)}.autoswitch input:checked+.switchtrack:after{transform:translateX(18px);background:var(--green)}.autoswitch input:focus-visible+.switchtrack{outline:2px solid var(--blue);outline-offset:2px}.autoswitch input:disabled+.switchtrack{opacity:.55}.switchstate{min-width:38px;color:var(--text);font-weight:650}@media(max-width:620px){.healthhead{align-items:flex-start}.autoswitch{white-space:normal}}
+.event.clickable{cursor:pointer}.event.clickable:hover{background:#152030}dialog{width:min(920px,94vw);max-height:88vh;overflow:auto;background:#0d141e;color:var(--text);border:1px solid #34445a;border-radius:16px;padding:20px}dialog::backdrop{background:#000b}.detailgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.detailbox{background:#101b28;padding:10px;border-radius:9px;overflow-wrap:anywhere}.closebtn{float:right;background:#223047;color:white;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}@media(max-width:620px){.detailgrid{grid-template-columns:1fr}}
 </style></head><body><main class="wrap"><div class="top"><div><div class="brand">₿ BITAXE GAMMA 601</div><div class="sub" id="ver">AxeOS</div></div><div class="status"><span class="dot" id="dot"></span><b id="state">WARTE AUF DATEN</b><span class="refresh" id="seen">Refresh —</span></div></div>
 <section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="hashstats"><div class="hashstat">10m<b id="hash10m">—</b></div><div class="hashstat">1h<b id="hash1h">—</b></div><div class="hashstat">24h<b id="hash24h">—</b><small id="cover24h"></small></div><div class="hashstat">7d<b id="hash7d">—</b><small id="cover7d"></small></div></div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="voltage">—</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
 <div class="card" style="grid-column:1/-1"><div class="healthhead"><div class="label">Health & Gerätestatus</div><label class="autoswitch" title="Automatischen AxeOS-Neustart bei anhaltendem Hashrate-Einbruch ein- oder ausschalten"><input id="autoRestartToggle" type="checkbox" disabled><span class="switchtrack"></span><span>Auto-Restart</span><span class="switchstate" id="autoRestartState">—</span></label></div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div><div class="healthdetails" id="healthDetails"></div></div>
@@ -75,18 +83,20 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 <div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Hashrate</div><div class="sub">GH/s</div></div><div class="tabs" data-chart="hashrate"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="chart"><canvas id="hashrate"></canvas></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Leistung & Temperatur</div><div class="legend"><span><i class="key asic"></i>ASIC °C</span><span><i class="key vr"></i>VR °C</span><span><i class="key power"></i>Leistung W</span><span><i class="key voltage"></i>Input V</span></div></div><div class="tabs" data-chart="thermal"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="dual"><div class="mini"><canvas id="temperature"></canvas></div><div class="mini"><canvas id="powerchart"></canvas></div></div></div>
-<div class="card wide"><div class="label">Incidents</div><div class="events" id="incidents"></div></div><div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div></section></main>
+<div class="card wide"><div class="label">Incidents</div><div class="events" id="incidents"></div></div><div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div></section></main><dialog id="incidentDialog"><button class="closebtn" onclick="$('incidentDialog').close()">Schließen</button><div id="incidentDetail"></div></dialog>
 <script>
 const $=id=>document.getElementById(id), fmt=(v,d=1)=>v==null?'—':Number(v).toFixed(d), dur=s=>{if(s==null)return'—';let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=Math.floor(s%60);if(d)return d+'d '+h+'h '+m+'m';if(h)return h+'h '+m+'m';return m+'m '+x+'s'}, diff=v=>{if(v==null)return'—';if(v>=1e12)return(v/1e12).toFixed(2)+'T';if(v>=1e9)return(v/1e9).toFixed(2)+'G';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1e3)return(v/1e3).toFixed(2)+'K';return String(v)};
 const REFRESH_MS=10000;let lastRefreshAt=0,nextRefreshAt=0;function markRefresh(){lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+REFRESH_MS;refreshClock()}function refreshClock(){if(!lastRefreshAt){$('seen').textContent='Refresh —';return}let next=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000)),stamp=new Date(lastRefreshAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});$('seen').textContent='Refresh '+stamp+' · nächster in '+next+'s'}
 const coverage=s=>{if(!s)return'';if(s>=86400)return Math.floor(s/86400)+'d Daten';return Math.max(1,Math.floor(s/3600))+'h Daten'};
 async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},h=x.hashrate_history||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hash10m').textContent=fmt(d.hashRate_10m/1000,2);$('hash1h').textContent=fmt(d.hashRate_1h/1000,2);$('hash24h').textContent=fmt(h.avg_24h/1000,2);$('hash7d').textContent=fmt(h.avg_7d/1000,2);$('cover24h').textContent=h.complete_24h?'':coverage(h.coverage_24h);$('cover7d').textContent=h.complete_7d?'':coverage(h.coverage_7d);$('power').textContent=fmt(d.power)+' W';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Erwartete Hashrate',fmt(d.expectedHashrate/1000,3)+' TH/s'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
-async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';draw('btcPriceChart',[{values:p.map(v=>v.close),color:color,width:2.5}],{decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
-function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=42,right=8,top=9,bottom=18;c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.values.filter(v=>v!=null));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';ctx.lineWidth=1;for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}(opt.markers||[]).forEach(m=>{let span=Math.max(1,opt.end-opt.start),x1=left+(m.started_at-opt.start)*(w-left-right)/span,x2=left+((m.ended_at||opt.end)-opt.start)*(w-left-right)/span;ctx.fillStyle='#ff596426';ctx.fillRect(Math.max(left,x1),top,Math.max(2,x2-x1),h-top-bottom)});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.values.forEach((v,i)=>{if(v==null)return;let x=left+i*(w-left-right)/Math.max(1,s.values.length-1),y=top+(max-v)*(h-top-bottom)/(max-min);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([])}
-async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json(),s=x.samples||[],o={markers:x.incidents||[],start:s.length?s[0].ts:0,end:s.length?s[s.length-1].ts:1};draw('hashrate',[{values:s.map(v=>v.hashrate),color:'#40e0a0'}],{...o,decimals:0});draw('temperature',[{values:s.map(v=>v.temp),color:'#ff5964',width:2.5},{values:s.map(v=>v.vr_temp),color:'#ffc857',width:2.5,dash:[7,5]}],{...o,min:20,max:85,unit:'°',decimals:0});draw('powerchart',[{values:s.map(v=>v.power),color:'#57a6ff'},{values:s.map(v=>v.voltage),color:'#40e0a0'}],{...o,min:0,max:40,decimals:1})}
+async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
+const chartState={};function axisLabel(ts,range){let d=new Date(ts*1000);return range==='7d'?d.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'}):d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
+function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.automatic?'#ffc857':'#ff5964';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
+async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json(),s=x.samples||[],pts=k=>s.map(v=>({ts:v.ts,v:v[k],gap:!!v.gap})),o={markers:x.markers||[],start:x.start,end:x.end,range};draw('hashrate',[{name:'Hashrate',unit:'GH/s',points:pts('hashrate'),color:'#40e0a0'}],{...o,decimals:0});draw('temperature',[{name:'ASIC',unit:'°C',points:pts('temp'),color:'#ff5964',width:2.5},{name:'VR',unit:'°C',points:pts('vr_temp'),color:'#ffc857',width:2.5,dash:[7,5]}],{...o,min:20,max:85,unit:'°',decimals:0});draw('powerchart',[{name:'Leistung',unit:'W',points:pts('power'),color:'#57a6ff'},{name:'Input',unit:'V',points:pts('voltage'),color:'#40e0a0'}],{...o,min:0,max:40,decimals:1})}
 async function events(){let r=await fetch('/api/events'),x=await r.json();$('events').innerHTML=x.length?x.map(e=>'<div class="event"><span>'+new Date(e.ts*1000).toLocaleString()+'</span><b class="sev-'+e.severity+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<div class="sub" style="padding-top:12px">Noch keine Ereignisse</div>'}
-async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{};return '<div class="event"><span>'+new Date(i.started_at*1000).toLocaleString()+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
+async function incidentDetail(id){let r=await fetch('/api/incidents/'+id),i=await r.json(),f=i.facts||{},d=(i.diagnostics||[]).at(-1),o=d?.observed||{},domains=o.hashrateMonitor?.asics?.[0]?.domains||[];$('incidentDetail').innerHTML='<h2>'+i.kind+'</h2><p>'+i.summary+'</p><div class="detailgrid">'+[['Beginn',new Date(i.started_at*1000).toLocaleString('de-DE')],['Dauer',dur((i.ended_at||Date.now()/1000)-i.started_at)],['Basis',fmt(f.baseline_gh,0)+' GH/s'],['Schwelle',fmt(f.threshold_gh,0)+' GH/s'],['Tiefster Wert',fmt(f.lowest_gh,0)+' GH/s'],['Mittelwert',fmt(f.average_gh,0)+' GH/s'],['Diagnosequelle',d?.source_status||'keine'],['Vor Neustart',fmt(o.hashRate,0)+' GH/s · '+fmt(o.power,1)+' W · '+fmt(o.voltage/1000,2)+' V'],['Domains (beobachtet)',domains.length?domains.map(v=>fmt(v,2)).join(' / '):'—']].map(v=>'<div class="detailbox"><span class="sub">'+v[0]+'</span><br><b>'+v[1]+'</b></div>').join('')+'</div><h3>Einordnung</h3><p>Messwerte sind beobachtet. Berechneter Eingangsstrom ist abgeleitet. Eine Ursache wird nur angezeigt, wenn AxeOS sie direkt gemeldet hat; andernfalls bleibt sie unbekannt.</p>';$('incidentDialog').showModal()}
+async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{};return '<div class="event clickable" onclick="incidentDetail('+i.id+')"><span>'+new Date(i.started_at*1000).toLocaleString()+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
 async function autoRestartStatus(){let r=await fetch('/api/settings/auto-restart'),a=await r.json(),t=$('autoRestartToggle');t.checked=!!a.enabled;t.disabled=false;$('autoRestartState').textContent=a.enabled?'EIN':'AUS';$('autoRestartState').style.color=a.enabled?'var(--green)':'var(--muted)'}
 $('autoRestartToggle').onchange=async e=>{let t=e.currentTarget,w=t.checked;t.disabled=true;$('autoRestartState').textContent='…';try{let r=await fetch('/api/settings/auto-restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:w})});if(!r.ok)throw new Error();await autoRestartStatus();await current();await events()}catch(err){t.checked=!w;t.disabled=false;$('autoRestartState').textContent='FEHLER';$('autoRestartState').style.color='var(--red)'}};
 async function refreshDashboard(){nextRefreshAt=Date.now()+REFRESH_MS;try{await Promise.all([current(),autoRestartStatus()]);markRefresh()}catch(e){refreshClock()}}document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});refreshDashboard();market();history();events();incidents();setInterval(()=>{refreshDashboard();history(document.querySelector('.tabs button.active').dataset.r);events();incidents()},REFRESH_MS);setInterval(refreshClock,1000);setInterval(market,60000);
@@ -101,6 +111,31 @@ def db():
     con = sqlite3.connect(DB_PATH, timeout=10)
     con.row_factory = sqlite3.Row
     return con
+
+
+def migrate_schema(con):
+    con.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)")
+    applied = {row[0] for row in con.execute("SELECT version FROM schema_migrations")}
+    if 2 not in applied:
+        columns = {row[1] for row in con.execute("PRAGMA table_info(events)")}
+        if "incident_id" not in columns:
+            con.execute("ALTER TABLE events ADD COLUMN incident_id INTEGER")
+        if "automatic" not in columns:
+            con.execute("ALTER TABLE events ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0")
+        if "details" not in columns:
+            con.execute("ALTER TABLE events ADD COLUMN details TEXT NOT NULL DEFAULT '{}'")
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS incident_diagnostics (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          incident_id INTEGER NOT NULL, captured_at INTEGER NOT NULL,
+          source_status TEXT NOT NULL, observed_json TEXT NOT NULL,
+          derived_json TEXT NOT NULL, raw_field_names_json TEXT NOT NULL,
+          FOREIGN KEY(incident_id) REFERENCES incidents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_incident_diagnostics_incident
+          ON incident_diagnostics(incident_id,captured_at);
+        """)
+        con.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(2,?)", (now(),))
 
 
 def init_db():
@@ -141,6 +176,7 @@ def init_db():
           key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
         """)
+        migrate_schema(con)
 
 
 def merge_intervals(intervals, start, end):
@@ -321,6 +357,42 @@ def get_sample_window(start, end):
     return [safe_payload(json.loads(r["payload"])) | {"ts": r["ts"]} for r in rows]
 
 
+def chart_history(start, end, bucket):
+    """Return timestamped aggregates and explicit gaps without turning low values into gaps."""
+    with db() as con:
+        rows = con.execute("""SELECT CAST(AVG(ts) AS INTEGER) ts,
+            AVG(hashrate) hashrate,AVG(power) power,AVG(temp) temp,
+            AVG(voltage)/1000.0 voltage,AVG(vr_temp) vr_temp,
+            AVG(core_voltage) core_voltage,AVG(frequency) frequency,
+            AVG(fan_rpm) fan_rpm,AVG(response_ms) response_ms,
+            MAX(accepted) accepted,MAX(rejected) rejected
+            FROM samples WHERE ts BETWEEN ? AND ? GROUP BY CAST(ts/? AS INTEGER) ORDER BY ts""",
+            (start, end, bucket)).fetchall()
+    result = []
+    gap_after = max(POLL_SECONDS * 3, int(bucket * 2.5))
+    previous_ts = None
+    for row in rows:
+        item = dict(row)
+        if previous_ts is not None and item["ts"] - previous_ts > gap_after:
+            result.append({"ts": previous_ts + 1, "gap": True})
+            result.append({"ts": item["ts"] - 1, "gap": True})
+        result.append(item)
+        previous_ts = item["ts"]
+    return result
+
+
+def chart_markers(start, end):
+    with db() as con:
+        incidents = con.execute("""SELECT id,started_at ts,ended_at,kind,summary description,0 automatic
+            FROM incidents WHERE started_at<=? AND COALESCE(ended_at,?)>=?""", (end, end, start)).fetchall()
+        events = con.execute("""SELECT id,ts,NULL ended_at,kind,message description,automatic
+            FROM events WHERE ts BETWEEN ? AND ? AND kind IN
+            ('HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
+             'OFFLINE','REBOOT','RECOVERED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
+            (start, end)).fetchall()
+    return sorted([dict(row) for row in (*incidents, *events)], key=lambda item: item["ts"])
+
+
 def backfill_historical_incidents(days=30):
     """Create evidence-only incidents from existing raw samples once after upgrading."""
     with db() as con:
@@ -373,11 +445,15 @@ def backfill_historical_incidents(days=30):
         con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('backfill_v11_1',?)", (str(now()),))
 
 
-def add_event(kind, severity, message, ts=None):
-    with db() as con:
-        cur = con.execute("INSERT INTO events(ts,kind,severity,message) VALUES(?,?,?,?)",
-                          (ts or now(), kind, severity, message))
-        return cur.lastrowid
+def add_event(kind, severity, message, ts=None, incident_id=None, automatic=False, details=None, con=None):
+    values = (ts or now(), kind, severity, message, incident_id, int(bool(automatic)),
+              json.dumps(details or {}, separators=(",", ":")))
+    if con is not None:
+        return con.execute("""INSERT INTO events
+            (ts,kind,severity,message,incident_id,automatic,details) VALUES(?,?,?,?,?,?,?)""", values).lastrowid
+    with db() as connection:
+        return connection.execute("""INSERT INTO events
+            (ts,kind,severity,message,incident_id,automatic,details) VALUES(?,?,?,?,?,?,?)""", values).lastrowid
 
 
 def update_event(event_id, kind, severity, message):
@@ -386,8 +462,91 @@ def update_event(event_id, kind, severity, message):
                     (kind, severity, message, event_id))
 
 
+def domain_register_paths(data):
+    paths = {}
+    for asic_index, asic in enumerate(((data or {}).get("hashrateMonitor") or {}).get("asics") or []):
+        for domain_index, value in enumerate(asic.get("domains") or []):
+            paths[f"hashrateMonitor.asics[{asic_index}].domains[{domain_index}]"] = value
+    return paths
+
+
+def diagnostic_snapshot(data):
+    observed = safe_payload(clean(data or {}))
+    raw_current = observed.get("current")
+    derived = {"calculatedInputCurrent": calculated_current(observed)}
+    field_paths = domain_register_paths(observed)
+    return {
+        "observed": observed,
+        "derived": derived,
+        "field_names": {"rawCurrent": "current", "domain_register_values": field_paths},
+        "semantics": {"current": "raw AxeOS value; unit not inferred",
+                      "calculatedInputCurrent": "derived as power / input voltage",
+                      "domain_register_values": "observed AxeOS hashrateMonitor domain/register values; not summed"},
+    }
+
+
+def persist_pre_restart_snapshot(incident_id, data, source_status, restart_details, captured_at=None):
+    """Commit snapshot and restart event atomically; caller may restart only after return."""
+    stamp = int(captured_at or now())
+    snapshot = diagnostic_snapshot(data)
+    with db() as con:
+        con.execute("""INSERT INTO incident_diagnostics
+            (incident_id,captured_at,source_status,observed_json,derived_json,raw_field_names_json)
+            VALUES(?,?,?,?,?,?)""",
+            (incident_id, stamp, source_status,
+             json.dumps(snapshot["observed"], separators=(",", ":")),
+             json.dumps(snapshot["derived"], separators=(",", ":")),
+             json.dumps({"paths": snapshot["field_names"], "semantics": snapshot["semantics"]},
+                        separators=(",", ":"))))
+        add_event("AUTO_RECOVERY_RESTART", "warning", restart_details["reason"], stamp,
+                  incident_id, True, restart_details, con)
+    return snapshot
+
+
+def automatic_restarts_since(since):
+    with db() as con:
+        return con.execute("""SELECT COUNT(*) FROM events
+            WHERE kind='AUTO_RECOVERY_RESTART' AND automatic=1 AND ts>=?""", (since,)).fetchone()[0]
+
+
+def fetch_bitaxe_info():
+    req = urllib.request.Request(API_URL, headers={"Accept": "application/json", "User-Agent": "BitaxeMonitor/1.0"})
+    with urllib.request.urlopen(req, timeout=6) as res:
+        return json.load(res)
+
+
+def freshest_restart_evidence(fallback):
+    """Best-effort final read. Never discard the last valid sample when it fails."""
+    try:
+        raw = fetch_bitaxe_info()
+        return clean(raw), "fresh_api_read"
+    except Exception as exc:
+        return clean(fallback or {}), "fresh_api_read_failed:" + type(exc).__name__
+
+
+def restart_with_persisted_evidence(incident_id, fallback, details, captured_at=None):
+    """The restart request is deliberately unreachable until the DB transaction commits."""
+    evidence, source_status = freshest_restart_evidence(fallback)
+    persist_pre_restart_snapshot(incident_id, evidence, source_status, details, captured_at)
+    try:
+        request_axeos_restart()
+        request_status = "accepted"
+    except Exception as exc:
+        # AxeOS commonly closes the connection while rebooting. Telemetry verifies the outcome.
+        request_status = "connection_closed:" + type(exc).__name__
+    return evidence, source_status, request_status
+
+
 def clean(raw):
-    return {k: raw.get(k) for k in ALLOWED}
+    data = {k: raw.get(k) for k in ALLOWED}
+    monitor = raw.get("hashrateMonitor") or {}
+    safe_asics = []
+    for asic in monitor.get("asics") or []:
+        domains = [value for value in (asic.get("domains") or []) if isinstance(value, (int, float))]
+        safe_asics.append({"total": asic.get("total"), "errorCount": asic.get("errorCount"),
+                           "domains": domains})
+    data["hashrateMonitor"] = {"asics": safe_asics}
+    return data
 
 
 def mining_address(raw):
@@ -580,14 +739,34 @@ def expected_hashrate(data):
         return 0.0
 
 
-def hashrate_degradation(data):
+def stable_hashrate_baseline(data, at=None):
+    """Median of recent healthy telemetry, with AxeOS expectedHashrate as safe fallback."""
+    stamp = int(at or now())
+    expected = expected_hashrate(data)
+    floor = expected * 0.8 if expected else 0
+    try:
+        with db() as con:
+            rows = con.execute("SELECT hashrate FROM samples WHERE ts>=? AND ts<? AND hashrate>=? ORDER BY ts",
+                               (stamp - 3600, stamp, floor)).fetchall()
+    except sqlite3.Error:
+        rows = []
+    recent = [float(row[0]) for row in rows if row[0] is not None]
+    if len(recent) >= 12:
+        return statistics.median(recent)
+    smoothed = [float(data.get(key) or 0) for key in ("hashRate_1h", "hashRate_10m", "expectedHashrate")]
+    healthy = [value for value in smoothed if value >= floor and value > 0]
+    return statistics.median(healthy) if healthy else expected
+
+
+def hashrate_degradation(data, baseline=None):
     """Return evidence for sustained partial mining loss, or None when restart is unsafe."""
     data = data or {}
     expected = expected_hashrate(data)
-    threshold = expected * AUTO_RESTART_THRESHOLD
+    baseline = float(baseline or stable_hashrate_baseline(data))
+    threshold = baseline * (1 - AUTO_RESTART_LOSS)
     rate = float(data.get("hashRate") or 0)
     safe = (
-        expected > 0 and rate < threshold
+        baseline > 0 and rate < threshold
         and (data.get("uptimeSeconds") or 0) >= AUTO_RESTART_MIN_UPTIME
         and (data.get("power") or 0) > IDLE_POWER_W
         and (data.get("actualFrequency") or 0) > 0
@@ -597,7 +776,8 @@ def hashrate_degradation(data):
         and not data.get("power_fault")
         and not data.get("hardware_fault")
     )
-    return {"hashrate": rate, "expected": expected, "threshold": threshold} if safe else None
+    return {"hashrate": rate, "expected": expected, "baseline": baseline,
+            "threshold": threshold, "loss_pct": (baseline - rate) * 100 / baseline} if safe else None
 
 
 def axeos_restart_url(api_url=API_URL):
@@ -680,6 +860,8 @@ def poller():
     incident_during = None
     offline_since = None
     degraded_since = None
+    degradation_baseline = None
+    degradation_values = []
     auto_mode = False
     auto_restart_stamp = 0
     auto_recovery_polls = 0
@@ -701,9 +883,7 @@ def poller():
     while True:
         started = time.monotonic()
         try:
-            req = urllib.request.Request(API_URL, headers={"Accept": "application/json", "User-Agent": "BitaxeMonitor/1.0"})
-            with urllib.request.urlopen(req, timeout=6) as res:
-                raw = json.load(res)
+            raw = fetch_bitaxe_info()
             address = mining_address(raw)
             if address:
                 with market_lock:
@@ -719,9 +899,12 @@ def poller():
             fact = observed_cause(data)
             rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
             stopped = (hashrate <= 10 and not data.get("miningPaused")) or bool(fact)
-            degradation = hashrate_degradation(data)
-            expected = expected_hashrate(data)
-            healthy_hashrate = expected > 0 and hashrate >= expected * AUTO_RESTART_THRESHOLD
+            if degraded_since is None and not auto_mode:
+                degradation_baseline = stable_hashrate_baseline(data, stamp)
+            degradation = hashrate_degradation(data, degradation_baseline)
+            expected = degradation_baseline or expected_hashrate(data)
+            recovery_threshold = expected * 0.80 if expected else 0
+            healthy_hashrate = expected > 0 and hashrate >= recovery_threshold
             normal_polls = normal_polls + 1 if healthy_hashrate and not fact else 0
             if auto_locked and normal_polls >= RECOVERY_POLLS:
                 auto_locked = False
@@ -729,15 +912,33 @@ def poller():
                 add_event("AUTO_RESTART_REARMED", "info",
                           "Automatischer Neustart nach stabiler Hashrate wieder freigegeben")
             if degradation and not auto_mode:
-                degraded_since = degraded_since or stamp
+                if degraded_since is None:
+                    degraded_since = stamp
+                    degradation_values = []
+                    add_event("HASHRATE_DROP_DETECTED", "warning",
+                              f"Hashrate-Einbruch erkannt: {hashrate:.0f} GH/s bei Basis {expected:.0f} GH/s",
+                              details={"baseline_gh": expected, "threshold_gh": degradation["threshold"],
+                                       "observed_gh": hashrate, "loss_pct": degradation["loss_pct"]})
+                degradation_values.append(hashrate)
             elif not auto_mode:
                 degraded_since = None
+                degradation_baseline = None
+                degradation_values = []
 
             cooldown_ready = stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
+            rolling_limit_ready = automatic_restarts_since(stamp - 3600) < AUTO_RESTART_MAX_ATTEMPTS
+            if (auto_restart_enabled() and degradation and degraded_since
+                    and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
+                    and not rolling_limit_ready and not auto_locked):
+                auto_locked = True
+                set_state_value("auto_restart_locked", "true")
+                add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
+                          "Automatischer Neustart unterdrückt: bereits zwei Versuche in 60 Minuten",
+                          details={"window_seconds": 3600, "max_attempts": AUTO_RESTART_MAX_ATTEMPTS})
             if (auto_restart_enabled() and not auto_locked and not auto_mode
                     and incident_id is None and degradation
                     and degraded_since and stamp - degraded_since >= AUTO_RESTART_AFTER_SECONDS
-                    and cooldown_ready):
+                    and cooldown_ready and rolling_limit_ready):
                 incident_before = old
                 incident_start = degraded_since
                 auto_restart_stamp = stamp
@@ -745,38 +946,44 @@ def poller():
                 auto_uptime_reset = False
                 facts = {"auto_restart": True, "restart_requested_at": stamp,
                          "attempt": auto_attempt,
-                         "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
+                         "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
+                         "baseline_gh": degradation["baseline"],
                          "threshold_gh": degradation["threshold"],
                          "observed_gh": degradation["hashrate"],
-                         "expected_gh": degradation["expected"]}
+                         "lowest_gh": min(degradation_values or [hashrate]),
+                         "average_gh": sum(degradation_values or [hashrate]) / len(degradation_values or [hashrate]),
+                         "duration_seconds": stamp - degraded_since}
                 incident_id = create_incident(
                     incident_start, "HASHRATE_DEGRADATION", "HASHRATE DEGRADATION",
                     f"Hashrate seit {AUTO_RESTART_AFTER_SECONDS // 60} Minuten unter "
-                    f"{AUTO_RESTART_THRESHOLD * 100:.0f} %; automatischer Neustart angefordert",
+                    f"{AUTO_RESTART_LOSS * 100:.0f} % Verlust; automatischer Neustart angefordert",
                     "warning", facts=facts, before_override=incident_before)
                 attach_incident_sample(incident_id, stamp, "restart", data)
                 set_state_value("last_auto_restart", stamp)
                 last_auto_restart = stamp
                 auto_mode = True
                 auto_recovery_polls = 0
-                add_event("AUTO_RESTART", "warning",
-                          f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert")
+                details = {"reason": f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert",
+                           "attempt": auto_attempt, **facts}
                 try:
-                    request_axeos_restart()
+                    restart_with_persisted_evidence(incident_id, data, details, stamp)
                 except Exception as restart_error:
-                    # AxeOS may close the socket while rebooting; verification is telemetry-based.
-                    print("restart request result:", type(restart_error).__name__, flush=True)
+                    add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
+                              "Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
+                              incident_id=incident_id, automatic=True,
+                              details={"error_type": type(restart_error).__name__})
 
             if auto_mode:
                 attach_incident_sample(incident_id, stamp, "after_restart", data)
-                expected = expected_hashrate(data)
-                recovered = expected > 0 and hashrate >= expected * AUTO_RESTART_THRESHOLD
+                expected = degradation_baseline or expected_hashrate(data)
+                recovered = expected > 0 and hashrate >= expected * 0.80
                 auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
                 auto_uptime_reset = auto_uptime_reset or rebooted
                 facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
                          "attempt": auto_attempt, "uptime_reset": auto_uptime_reset,
                          "observed_gh": hashrate,
-                         "expected_gh": expected, "threshold_pct": AUTO_RESTART_THRESHOLD * 100}
+                         "baseline_gh": expected, "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
+                         "recovery_threshold_gh": expected * 0.80 if expected else None}
                 update_incident(incident_id, facts=facts,
                                 summary="Automatischer AxeOS-Neustart ausgelöst; Wiederherstellung wird geprüft")
                 outcome = auto_restart_outcome(
@@ -788,7 +995,8 @@ def poller():
                                     summary="Hashrate-Degradation automatisch durch AxeOS-Neustart behoben",
                                     recovery=recovery,
                                     after_sample=safe_payload(data), severity="warning", facts=facts)
-                    add_event("AUTO_RESTART_RECOVERED", "info", recovery)
+                    add_event("RECOVERED", "info", recovery, incident_id=incident_id,
+                              automatic=True, details=facts)
                     incident_id = incident_start = incident_before = incident_during = offline_since = None
                     auto_mode = False
                     degraded_since = None
@@ -803,12 +1011,17 @@ def poller():
                     update_incident(incident_id, severity="warning", facts=facts,
                                     summary="Erster Neustart ohne ausreichende Erholung; zweiter Versuch angefordert")
                     attach_incident_sample(incident_id, stamp, "retry", data)
-                    add_event("AUTO_RESTART_RETRY", "warning",
-                              "Erster Neustart erfolglos; zweiter und letzter Versuch angefordert")
+                    details = {"reason": "Erster Neustart erfolglos; zweiter und letzter Versuch angefordert",
+                               "attempt": auto_attempt, **facts}
                     try:
-                        request_axeos_restart()
+                        if automatic_restarts_since(stamp - 3600) >= AUTO_RESTART_MAX_ATTEMPTS:
+                            raise RuntimeError("rolling_restart_limit")
+                        restart_with_persisted_evidence(incident_id, data, details, stamp)
                     except Exception as restart_error:
-                        print("restart retry result:", type(restart_error).__name__, flush=True)
+                        add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
+                                  "Zweiter Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
+                                  incident_id=incident_id, automatic=True,
+                                  details={"error_type": type(restart_error).__name__})
                 elif outcome == "lock":
                     message = "Hashrate nach zwei automatischen Neustarts nicht erholt; Automatik bis zur nächsten stabilen Erholung gesperrt"
                     update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="critical",
@@ -908,7 +1121,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"status": "ok" if age is not None and age < POLL_SECONDS * 3 else "degraded", "last_sample_age": age}, 200 if age is not None and age < POLL_SECONDS * 3 else 503)
         if p.path == "/api/settings/auto-restart":
             return self.send_json({"enabled": auto_restart_enabled(),
-                                   "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
+                                   "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                    "after_seconds": AUTO_RESTART_AFTER_SECONDS,
                                    "cooldown_seconds": AUTO_RESTART_COOLDOWN,
                                    "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
@@ -936,7 +1149,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "age_seconds": age, "summary": summary, "data": data,
                                     "hashrate_history": cached_historical_hashrate(),
                                     "auto_restart": {"enabled": auto_restart_enabled(),
-                                        "threshold_pct": AUTO_RESTART_THRESHOLD * 100,
+                                        "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                         "after_seconds": AUTO_RESTART_AFTER_SECONDS,
                                         "cooldown_seconds": AUTO_RESTART_COOLDOWN,
                                         "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
@@ -963,13 +1176,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "invalid incident"}, 400)
             with db() as con:
                 row = con.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
-                samples = con.execute("SELECT ts,phase,payload FROM incident_samples WHERE incident_id=? ORDER BY ts", (incident_id,)).fetchall()
+                if row:
+                    window_end = (row["ended_at"] or now()) + 600
+                    telemetry = con.execute("SELECT ts,payload FROM samples WHERE ts BETWEEN ? AND ? ORDER BY ts",
+                                            (row["started_at"] - 600, window_end)).fetchall()
+                    diagnostics = con.execute("SELECT * FROM incident_diagnostics WHERE incident_id=? ORDER BY captured_at",
+                                              (incident_id,)).fetchall()
+                    related_events = con.execute("""SELECT ts,kind,severity,message,automatic,details FROM events
+                        WHERE incident_id=? OR ts BETWEEN ? AND ? ORDER BY ts""",
+                        (incident_id, row["started_at"] - 30, window_end)).fetchall()
             if not row:
                 return self.send_json({"error": "not found"}, 404)
             item = dict(row)
             for key in ("facts", "before_sample", "after_sample", "pre_stats"):
                 item[key] = json.loads(item[key]) if item.get(key) else None
-            item["samples"] = [{"ts": s["ts"], "phase": s["phase"], **json.loads(s["payload"])} for s in samples]
+            item["samples"] = [{"ts": s["ts"], **safe_payload(json.loads(s["payload"]))} for s in telemetry]
+            item["diagnostics"] = [{"captured_at": d["captured_at"], "source_status": d["source_status"],
+                "observed": json.loads(d["observed_json"]), "derived": json.loads(d["derived_json"]),
+                "field_info": json.loads(d["raw_field_names_json"])} for d in diagnostics]
+            item["events"] = [{**dict(e), "details": json.loads(e["details"] or "{}")} for e in related_events]
             return self.send_json(item)
         if p.path == "/api/market":
             with market_lock:
@@ -987,12 +1212,10 @@ class Handler(BaseHTTPRequestHandler):
             ranges = {"1h": 3600, "24h": 86400, "7d": 604800}
             seconds = ranges.get(parse_qs(p.query).get("range", ["1h"])[0], 3600)
             bucket = max(10, seconds // 600)
-            with db() as con:
-                rows = con.execute("""SELECT (ts/?)*? ts,AVG(hashrate) hashrate,AVG(power) power,AVG(temp) temp,
-                    AVG(voltage)/1000.0 voltage,AVG(vr_temp) vr_temp
-                    FROM samples WHERE ts>=? GROUP BY (ts/?) ORDER BY ts""", (bucket, bucket, now()-seconds, bucket)).fetchall()
-                markers = con.execute("SELECT id,started_at,ended_at,kind FROM incidents WHERE started_at>=? ORDER BY started_at", (now()-seconds,)).fetchall()
-            return self.send_json({"samples": [dict(r) for r in rows], "incidents": [dict(r) for r in markers]})
+            end = now()
+            start = end - seconds
+            return self.send_json({"start": start, "end": end, "samples": chart_history(start, end, bucket),
+                                   "markers": chart_markers(start, end)})
         self.send_error(404)
 
     def do_POST(self):

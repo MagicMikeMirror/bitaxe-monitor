@@ -78,7 +78,7 @@ Health endpoint: `http://localhost:8787/healthz`
 | `VOLTAGE_LOW_V` | `4.75` | Low-input-voltage diagnostic threshold |
 | `EXPECTED_HASHRATE_GH` | `0` | Optional expected hashrate; 0 uses AxeOS when available |
 | `AUTO_RESTART_ENABLED` | `false` | Restart AxeOS after sustained partial hashrate loss |
-| `AUTO_RESTART_THRESHOLD_PCT` | `70` | Percentage of expected hashrate that starts the timer |
+| `AUTO_RESTART_THRESHOLD_PCT` | `70` | Hashrate loss in percent that starts the timer (70 means restart below 30% of the stable baseline) |
 | `AUTO_RESTART_AFTER_SECONDS` | `600` | Continuous degradation required before restart |
 | `AUTO_RESTART_MIN_UPTIME_SECONDS` | `900` | Never restart during the initial warm-up period |
 | `AUTO_RESTART_COOLDOWN_SECONDS` | `1800` | Re-arm delay after a successful recovery |
