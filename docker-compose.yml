@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.2.4
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.3.0
     container_name: bitaxe-monitor
     restart: unless-stopped
     environment:
@@ -59,7 +59,7 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.2.4"
+  version: "1.3.0"
   update_at: "2026-09-20"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor

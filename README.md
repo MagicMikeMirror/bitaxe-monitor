@@ -20,7 +20,13 @@ events without Grafana, InfluxDB or additional containers.
 - Correlated incident classification instead of repeated low-hashrate alarms
 - Robust ONLINE / DEGRADED / OFFLINE / RECOVERING state machine
 - Input current calculated from power and input voltage (`I = P / U`)
+- Current mining efficiency calculated from observed power and hashrate (`W / TH/s = J/TH`)
+- Neutral 24-hour input-voltage minimum, average and maximum from persistent telemetry
 - Diagnostic capture of safe AxeOS power and hardware fault fields
+- Clickable incident forensics with synchronized telemetry from five minutes before detection through five minutes after recovery
+- BM1370 Error Count and reset-safe delta from the last stable pre-incident sample
+- Immutable standard dashboard layout with drag-and-drop, minimize/hide controls and named SQLite-backed custom layouts
+- Gamma 601 mining profiles: Eco (490/1100/65), Standard (525/1150/65), OC (650/1180/60) and Performance (725/1220/57), always with automatic fan control
 - Responsive dark dashboard for TV, desktop and mobile
 - Single multi-architecture container with no Python dependencies
 

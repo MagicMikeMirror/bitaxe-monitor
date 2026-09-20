@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import pathlib
 import sqlite3
 import tempfile
@@ -13,6 +14,69 @@ SPEC.loader.exec_module(APP)
 
 
 class IncidentClassificationTests(unittest.TestCase):
+    def test_efficiency_j_th_and_zero_hashrate(self):
+        self.assertAlmostEqual(APP.mining_efficiency(23.0, 1210), 19.0, places=1)
+        self.assertIsNone(APP.mining_efficiency(23.0, 0))
+        self.assertIsNone(APP.mining_efficiency(None, 1210))
+
+    def test_diagnostic_snapshot_keeps_full_available_fields_and_zero_domains(self):
+        data = {"hashRate": 270, "hashRate_1m": 300, "hashRate_10m": 800,
+                "hashRate_1h": 1100, "expectedHashrate": 1224, "power": 23,
+                "voltage": 4860, "temp": 61, "vrTemp": 63, "fanrpm": 7000,
+                "fanspeed": 72, "actualFrequency": 600, "coreVoltage": 1150,
+                "coreVoltageActual": 1144, "errorPercentage": 0.2,
+                "sharesAccepted": 100, "sharesRejected": 1, "workReceived": 50,
+                "responseTime": 120, "uptimeSeconds": 3600,
+                "resetReason": "Software reset", "version": "v2.15.1",
+                "hashrateMonitor": {"asics": [{"errorCount": 1567,
+                                                 "domains": [0, 287, 0, 0]}]}}
+        snapshot = APP.diagnostic_snapshot(data)["observed"]
+        self.assertEqual(snapshot["hashrateMonitor"]["asics"][0]["domains"], [0, 287, 0, 0])
+        self.assertEqual(snapshot["hashrateMonitor"]["asics"][0]["errorCount"], 1567)
+        for field in ("hashRate", "hashRate_1m", "hashRate_10m", "hashRate_1h",
+                      "expectedHashrate", "power", "voltage", "temp", "vrTemp",
+                      "fanrpm", "fanspeed", "actualFrequency", "coreVoltage",
+                      "coreVoltageActual", "sharesAccepted", "sharesRejected",
+                      "workReceived", "responseTime", "uptimeSeconds", "version"):
+            self.assertIn(field, snapshot)
+
+    def test_diagnostic_snapshot_tolerates_missing_optional_fields(self):
+        snapshot = APP.diagnostic_snapshot({"hashRate": 0})["observed"]
+        self.assertEqual(snapshot["hashRate"], 0)
+        self.assertIsNone(snapshot["efficiencyJTh"])
+
+    def test_error_delta_minima_window_and_counter_reset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "metrics.sqlite3")
+            try:
+                APP.init_db()
+                start = 10_000
+                for offset, voltage, errors in ((-300, 4900, 900), (-50, 4830, 950), (-10, 4860, 980)):
+                    APP.save({"hashRate": 1200, "power": 23, "voltage": voltage,
+                              "hashrateMonitor": {"asics": [{"errorCount": errors,
+                                  "domains": [300, 300, 300, 300]}]}}, start + offset)
+                metrics = APP.incident_metrics(start, {"voltage": 4860,
+                    "hashrateMonitor": {"asics": [{"errorCount": 1567,
+                                                    "domains": [0, 287, 0, 0]}]}})
+                self.assertEqual(metrics["voltage_min_60s"], 4830)
+                self.assertEqual(metrics["voltage_min_5m"], 4830)
+                self.assertEqual(metrics["error_count_delta"], 587)
+                self.assertEqual(metrics["domains"], [0, 287, 0, 0])
+                reset = APP.incident_metrics(start, {"hashrateMonitor": {"asics": [
+                    {"errorCount": 4, "domains": [0, 287, 0, 0]}]}})
+                self.assertIsNone(reset["error_count_delta"])
+            finally:
+                APP.DB_PATH = original
+
+    def test_incident_window_is_exactly_five_minutes_around_incident(self):
+        self.assertEqual(APP.incident_window(1000, 1120), {"start": 700, "end": 1420})
+        self.assertIn('id="incidentHash"', APP.HTML)
+        self.assertIn('id="incidentErrors"', APP.HTML)
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertIn("ASIC_DOMAIN_STALL_DETECTED", source)
+        self.assertNotIn("ASIC_DOMAIN_STALL_DETECASIC", source)
+
     def test_auto_restart_detects_safe_partial_hashrate_loss(self):
         original = APP.AUTO_RESTART_MIN_UPTIME
         APP.AUTO_RESTART_MIN_UPTIME = 900
@@ -64,11 +128,80 @@ class IncidentClassificationTests(unittest.TestCase):
                     columns = {row[1] for row in con.execute("PRAGMA table_info(events)")}
                     message = con.execute("SELECT message FROM events WHERE id=1").fetchone()[0]
                     diagnostics = con.execute("SELECT name FROM sqlite_master WHERE name='incident_diagnostics'").fetchone()
+                    layouts = con.execute("SELECT name FROM sqlite_master WHERE name='dashboard_layouts'").fetchone()
                 self.assertTrue({"incident_id", "automatic", "details"}.issubset(columns))
                 self.assertEqual(message, "old event")
                 self.assertIsNotNone(diagnostics)
+                self.assertIsNotNone(layouts)
             finally:
                 APP.DB_PATH = original
+
+    def test_named_layout_validation_requires_every_widget_once(self):
+        layout = [{"id": widget, "collapsed": index == 0, "hidden": index == 1}
+                  for index, widget in enumerate(APP.LAYOUT_WIDGETS)]
+        validated = APP.validate_dashboard_layout(layout)
+        self.assertEqual([item["id"] for item in validated], list(APP.LAYOUT_WIDGETS))
+        self.assertTrue(validated[0]["collapsed"])
+        self.assertTrue(validated[1]["hidden"])
+        with self.assertRaises(ValueError):
+            APP.validate_dashboard_layout(layout[:-1])
+        with self.assertRaises(ValueError):
+            APP.validate_dashboard_layout(layout[:-1] + [layout[0]])
+
+    def test_standard_layout_is_not_written_to_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "layouts.sqlite3")
+            try:
+                APP.init_db()
+                with APP.db() as con:
+                    self.assertEqual(con.execute("SELECT COUNT(*) FROM dashboard_layouts").fetchone()[0], 0)
+            finally:
+                APP.DB_PATH = original
+
+    def test_custom_layout_requires_own_non_standard_name(self):
+        self.assertEqual(APP.validate_layout_name("  TV Ansicht  "), "TV Ansicht")
+        for value in (None, "", "Standard", "standardlayout", "x" * 41):
+            with self.assertRaises(ValueError):
+                APP.validate_layout_name(value)
+
+    def test_mining_profiles_keep_cooling_and_power_settings_together(self):
+        expected = {
+            "eco": (490, 1100, 65, 1), "standard": (525, 1150, 65, 1),
+            "oc": (650, 1180, 60, 1), "performance": (725, 1220, 57, 1),
+        }
+        for key, values in expected.items():
+            profile = APP.MINING_PROFILES[key]
+            self.assertEqual((profile["frequency"], profile["coreVoltage"],
+                              profile["temptarget"], profile["overclockEnabled"]), values)
+            self.assertEqual(profile["autofanspeed"], 1)
+
+    def test_active_profile_requires_frequency_voltage_and_cooling_match(self):
+        standard = {"frequency": 525, "coreVoltage": 1150, "temptarget": 65,
+                    "autofanspeed": 1, "overclockEnabled": 1}
+        self.assertEqual(APP.active_mining_profile(standard), "standard")
+        self.assertIsNone(APP.active_mining_profile(standard | {"autofanspeed": 0}))
+        self.assertIsNone(APP.active_mining_profile(standard | {"temptarget": 60}))
+
+    def test_profile_update_sends_one_complete_patch(self):
+        captured = {}
+        original = APP.urllib.request.urlopen
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+        def fake(request, timeout):
+            captured.update(json.loads(request.data))
+            self.assertEqual(request.method, "PATCH")
+            return Response()
+        APP.urllib.request.urlopen = fake
+        try:
+            APP.update_axeos_profile(APP.MINING_PROFILES["oc"])
+        finally:
+            APP.urllib.request.urlopen = original
+        self.assertEqual(captured, {"frequency": 650, "coreVoltage": 1180,
+                                   "temptarget": 60, "autofanspeed": 1,
+                                   "overclockEnabled": 1})
 
     def test_auto_restart_outcome_retries_once_then_locks(self):
         verify = APP.AUTO_RESTART_VERIFY_SECONDS
