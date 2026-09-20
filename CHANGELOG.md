@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.4
+
+- Detect at least two zero-hash ASIC domains independently of aggregate hashrate spikes.
+- Confirm the fault over three polls and restart after 60 seconds with all existing safety gates.
+- Persist domain indexes and values in the forensic incident snapshot and require all four domains for recovery.
+- Allow one second domain-stall recovery inside the normal cooldown while retaining the two-per-hour hard limit.
+
 ## 1.2.3
 
 - Use compact coverage labels in the hashrate card so 1h, 24h and 7d values never overlap.

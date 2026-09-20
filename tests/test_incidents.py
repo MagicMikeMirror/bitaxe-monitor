@@ -84,6 +84,25 @@ class IncidentClassificationTests(unittest.TestCase):
         self.assertEqual(paths["hashrateMonitor.asics[0].domains[3]"], 287.7)
         self.assertNotIn("sum", APP.diagnostic_snapshot(data)["derived"])
 
+    def test_domain_stall_detects_three_dead_domains_despite_hashrate_spike(self):
+        data = {"hashRate": 390, "uptimeSeconds": 3600, "power": 22.6,
+                "actualFrequency": 600, "miningPaused": False,
+                "isUsingFallbackStratum": False, "overheat_mode": 0,
+                "hashrateMonitor": {"asics": [{"domains": [0, 390, 0, 0]}]}}
+        evidence = APP.domain_stall_evidence(data)
+        self.assertEqual(evidence["stalled_indexes"], [0, 2, 3])
+        self.assertEqual(evidence["active_count"], 1)
+
+    def test_domain_stall_respects_safety_gates_and_requires_all_domains_for_recovery(self):
+        base = {"uptimeSeconds": 3600, "power": 22.6, "actualFrequency": 600,
+                "hashrateMonitor": {"asics": [{"domains": [0, 330, 0, 0]}]}}
+        for change in ({"power_fault": "fault"}, {"overheat_mode": 1},
+                       {"miningPaused": True}, {"power": 5}, {"uptimeSeconds": 30}):
+            self.assertIsNone(APP.domain_stall_evidence(base | change))
+        self.assertFalse(APP.domains_recovered(base))
+        self.assertTrue(APP.domains_recovered({"hashrateMonitor": {"asics": [
+            {"domains": [280, 310, 340, 290]}]}}))
+
     def test_snapshot_and_event_commit_before_restart_request(self):
         with tempfile.TemporaryDirectory() as directory:
             original_path, original_fetch, original_restart = APP.DB_PATH, APP.fetch_bitaxe_info, APP.request_axeos_restart
