@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0
+
+- Show current mining efficiency in J/TH and neutral 24-hour input-voltage min/average/max values.
+- Preserve complete allow-listed AxeOS telemetry immediately before automatic recovery.
+- Track the neutral BM1370 Error Count delta from the last stable pre-incident sample without treating counter resets as negative errors.
+- Add synchronized incident charts from five minutes before detection through five minutes after recovery, including raw domain values and event markers.
+- Add pre-incident 60-second and five-minute voltage minima without assigning undocumented voltage severity thresholds.
+- Add an immutable standard dashboard layout plus named persistent custom layouts.
+- Allow cards to be reordered, minimized and hidden in an explicit edit mode; every saved variation requires a new unique name.
+- Add guarded Gamma 601 mining profiles that atomically pair frequency/voltage with automatic fan control and a temperature target.
+- Verify the complete profile after the required AxeOS restart; custom OC profiles require an explicit warning confirmation.
+
 ## 1.2.4
 
 - Detect at least two zero-hash ASIC domains independently of aggregate hashrate spikes.

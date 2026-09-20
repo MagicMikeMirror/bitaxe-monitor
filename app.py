@@ -68,7 +68,19 @@ ALLOWED = (
 INCIDENT_KINDS = {
     "POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
     "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE",
-    "HASHRATE_DEGRADATION", "UNKNOWN"
+    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "UNKNOWN"
+}
+
+LAYOUT_WIDGETS = (
+    "hashrate", "power", "temperatures", "shares", "pool", "uptime", "health",
+    "mining-profile", "bitcoin", "public-pool", "hashrate-chart", "thermal-chart", "incidents", "events"
+)
+
+MINING_PROFILES = {
+    "eco": {"label": "Eco", "frequency": 490, "coreVoltage": 1100, "temptarget": 65, "autofanspeed": 1, "overclockEnabled": 1, "custom": False},
+    "standard": {"label": "Standard", "frequency": 525, "coreVoltage": 1150, "temptarget": 65, "autofanspeed": 1, "overclockEnabled": 1, "custom": False},
+    "oc": {"label": "OC", "frequency": 650, "coreVoltage": 1180, "temptarget": 60, "autofanspeed": 1, "overclockEnabled": 1, "custom": True},
+    "performance": {"label": "Performance", "frequency": 725, "coreVoltage": 1220, "temptarget": 57, "autofanspeed": 1, "overclockEnabled": 1, "custom": True},
 }
 
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
@@ -77,10 +89,12 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 :root{color-scheme:dark;--bg:#070a0f;--card:#101620;--muted:#8390a3;--text:#f3f6fb;--green:#40e0a0;--yellow:#ffc857;--red:#ff5964;--blue:#57a6ff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 70% -20%,#172638,#070a0f 45%);color:var(--text);font:15px system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:1600px;margin:auto;padding:22px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center}.brand{font-size:clamp(23px,3vw,40px);font-weight:800;letter-spacing:.03em}.status{display:flex;gap:9px;align-items:center;color:var(--muted)}.dot{width:11px;height:11px;border-radius:50%;background:var(--red);box-shadow:0 0 18px currentColor}.dot.ok{background:var(--green)}.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:20px 0}.card{background:linear-gradient(145deg,#121a25,#0d121a);border:1px solid #202b3a;border-radius:16px;padding:16px;min-width:0;box-shadow:0 10px 35px #0005}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.1em}.value{font-size:clamp(22px,2.4vw,38px);font-weight:750;margin-top:7px;white-space:nowrap}.sub{color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis}.hashstats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin-top:9px}.hashstat{min-width:0;color:var(--muted);font-size:10px;text-transform:uppercase}.hashstat b{display:block;color:#dce5f1;font-size:13px;line-height:1.2;white-space:nowrap}.hashstat small{display:block;color:var(--muted);font-size:9px;white-space:nowrap}.wide{grid-column:span 3}.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}.facts.poolfacts{grid-template-columns:repeat(4,1fr)}.fact{background:#0b1119;border-radius:10px;padding:10px}.fact b{display:block;font-size:18px;margin-top:3px}.healthdetails{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px;padding-top:11px;border-top:1px solid #202b3a;color:#bac5d4;font-size:13px}.healthdetails b{color:var(--text);font-weight:650}.pricechart{height:105px;margin:9px 0 2px}.pricechart canvas{width:100%;height:105px}.pricechange{font-weight:700}.pricechange.up{color:var(--green)}.pricechange.down{color:var(--red)}.chart{height:230px;position:relative}.chart canvas{width:100%;height:190px}.dual{height:230px;display:grid;grid-template-rows:1fr 1fr;gap:8px;margin-top:4px}.mini{min-height:0;position:relative}.mini canvas{width:100%;height:94px}.legend{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;color:var(--muted);font-size:12px}.key{display:inline-block;width:18px;height:3px;border-radius:2px;margin:0 6px 3px 0;vertical-align:middle}.key.asic{background:var(--red)}.key.vr{height:0;border-top:3px dashed var(--yellow)}.key.power{background:var(--blue)}.key.voltage{background:var(--green)}.tabs{display:flex;gap:7px}.tabs button{background:#182231;color:#bac5d4;border:0;border-radius:8px;padding:6px 12px;cursor:pointer}.tabs button.active{background:var(--blue);color:#04101d}.events{max-height:310px;overflow:auto}.event{display:grid;grid-template-columns:145px minmax(155px,190px) minmax(0,1fr);gap:12px;padding:10px 0;border-bottom:1px solid #202b3a;align-items:start}.event>*{min-width:0}.event>b{white-space:nowrap}.event>span:last-child{overflow-wrap:anywhere;line-height:1.45}.sev-warning{color:var(--yellow)}.sev-critical{color:var(--red)}.sev-info{color:var(--green)}@media(max-width:1050px){.grid{grid-template-columns:repeat(3,1fr)}.wide{grid-column:span 3}.facts.poolfacts{grid-template-columns:repeat(2,1fr)}}@media(max-width:620px){.wrap{padding:13px}.grid{grid-template-columns:1fr 1fr}.wide{grid-column:span 2}.facts,.facts.poolfacts{grid-template-columns:1fr}.hashstats{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:8px}.event{grid-template-columns:1fr;gap:4px}.event>b{white-space:normal}.top{align-items:flex-start;flex-direction:column}.chart{height:210px}.dual{height:220px}}
 .status{flex-wrap:wrap;justify-content:flex-end}.refresh{font-variant-numeric:tabular-nums;white-space:nowrap}
 .healthhead{display:flex;align-items:center;justify-content:space-between;gap:16px}.autoswitch{display:inline-flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}.autoswitch input{position:absolute;opacity:0;pointer-events:none}.switchtrack{width:42px;height:24px;border-radius:14px;background:#273343;border:1px solid #39485c;position:relative;transition:.2s}.switchtrack:after{content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;border-radius:50%;background:#9aa7b8;transition:.2s}.autoswitch input:checked+.switchtrack{background:#176c51;border-color:var(--green)}.autoswitch input:checked+.switchtrack:after{transform:translateX(18px);background:var(--green)}.autoswitch input:focus-visible+.switchtrack{outline:2px solid var(--blue);outline-offset:2px}.autoswitch input:disabled+.switchtrack{opacity:.55}.switchstate{min-width:38px;color:var(--text);font-weight:650}@media(max-width:620px){.healthhead{align-items:flex-start}.autoswitch{white-space:normal}}
-.event.clickable{cursor:pointer}.event.clickable:hover{background:#152030}dialog{width:min(920px,94vw);max-height:88vh;overflow:auto;background:#0d141e;color:var(--text);border:1px solid #34445a;border-radius:16px;padding:20px}dialog::backdrop{background:#000b}.detailgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.detailbox{background:#101b28;padding:10px;border-radius:9px;overflow-wrap:anywhere}.closebtn{float:right;background:#223047;color:white;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}@media(max-width:620px){.detailgrid{grid-template-columns:1fr}}
+.event.clickable{cursor:pointer}.event.clickable:hover{background:#152030}dialog{width:min(1180px,96vw);max-height:90vh;overflow:auto;background:#0d141e;color:var(--text);border:1px solid #34445a;border-radius:16px;padding:20px}dialog::backdrop{background:#000b}.detailgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.detailbox{background:#101b28;padding:10px;border-radius:9px;overflow-wrap:anywhere}.incidentcharts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.incidentchart{height:190px;background:#0a111a;border:1px solid #202b3a;border-radius:10px;padding:9px}.incidentchart canvas{width:100%;height:155px}.closebtn{float:right;background:#223047;color:white;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}@media(max-width:720px){.detailgrid,.incidentcharts{grid-template-columns:1fr}}
+.layoutbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px}.layoutbar select,.layoutbar button{background:#182231;color:#dce5f1;border:1px solid #34445a;border-radius:8px;padding:7px 10px}.layoutbar button{cursor:pointer}.layoutdirty{color:var(--yellow);font-size:12px}.widgetbar{display:none;align-items:center;gap:7px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #34445a}.widgetbar b{margin-right:auto}.widgetbar button{background:#1b293a;color:#dce5f1;border:0;border-radius:6px;padding:5px 8px;cursor:pointer}.grid.layout-edit .widgetbar{display:flex}.grid.layout-edit>.card{outline:1px dashed #52657d;cursor:grab}.grid.layout-edit>.card.is-hidden{display:block;opacity:.38}.grid:not(.layout-edit)>.card.is-hidden{display:none}.card.is-collapsed .widget-body{display:none}.card.dragging{opacity:.35}.card.dragover{outline:2px solid var(--blue)!important}.widget-body{display:contents}
 </style></head><body><main class="wrap"><div class="top"><div><div class="brand">₿ BITAXE GAMMA 601</div><div class="sub" id="ver">AxeOS</div></div><div class="status"><span class="dot" id="dot"></span><b id="state">WARTE AUF DATEN</b><span class="refresh" id="seen">Refresh —</span></div></div>
-<section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="hashstats"><div class="hashstat">10m<b id="hash10m">—</b></div><div class="hashstat">1h<b id="hash1h">—</b><small id="cover1h"></small></div><div class="hashstat">24h<b id="hash24h">—</b><small id="cover24h"></small></div><div class="hashstat">7d<b id="hash7d">—</b><small id="cover7d"></small></div></div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="voltage">—</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
+<section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="hashstats"><div class="hashstat">10m<b id="hash10m">—</b></div><div class="hashstat">1h<b id="hash1h">—</b><small id="cover1h"></small></div><div class="hashstat">24h<b id="hash24h">—</b><small id="cover24h"></small></div><div class="hashstat">7d<b id="hash7d">—</b><small id="cover7d"></small></div></div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="efficiency">— J/TH</div><div class="sub" id="voltage">—</div><div class="sub" id="voltageStats">24h —</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
 <div class="card" style="grid-column:1/-1"><div class="healthhead"><div class="label">Health & Gerätestatus</div><label class="autoswitch" title="Automatischen AxeOS-Neustart bei anhaltendem Hashrate-Einbruch ein- oder ausschalten"><input id="autoRestartToggle" type="checkbox" disabled><span class="switchtrack"></span><span>Auto-Restart</span><span class="switchstate" id="autoRestartState">—</span></label></div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div><div class="healthdetails" id="healthDetails"></div></div>
+<div class="card wide"><div class="label">Mining-Profil</div><div class="value" id="profileActive" style="font-size:24px">—</div><div class="sub" id="profileCurrent">Frequenz · Spannung · Kühlung</div><div class="tabs" id="profileButtons" style="margin-top:12px"><button data-profile="eco">Eco</button><button data-profile="standard">Standard</button><button data-profile="oc">OC</button><button data-profile="performance">Performance</button></div><div class="sub" id="profileHint">Profilwechsel speichert alle Werte gemeinsam und startet AxeOS neu.</div></div>
 <div class="card wide"><div class="label">Bitcoin & Blockwert</div><div class="value" id="btcEur">—</div><div class="sub"><span id="priceUpdated">Aktueller BTC/EUR-Kurs</span> · <span class="pricechange" id="priceChange">24h —</span></div><div class="pricechart"><canvas id="btcPriceChart"></canvas></div><div class="facts"><div class="fact" title="Neu erzeugte Bitcoin pro Block gemäß aktuellem Halving-Zyklus."><span class="sub">Block-Subvention</span><b id="blockSubsidy">— BTC</b></div><div class="fact" title="Gebühren der Transaktionen im aktuellen Blocktemplate. Sie kommen zusätzlich zur Block-Subvention hinzu."><span class="sub">Transaktionsgebühren</span><b id="blockFees">—</b></div><div class="fact" title="Der aktuell deiner Mining-Adresse zugewiesene Coinbase-Wert inklusive Transaktionsgebühren."><span class="sub" id="blockValueLabel">Aktueller Blockwert</span><b id="blockBtc">— BTC</b><span class="sub" id="blockEur">—</span></div></div><div class="sub">Blockhöhe <span id="blockHeight">—</span></div></div>
 <div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Hashrate</div><div class="sub">GH/s</div></div><div class="tabs" data-chart="hashrate"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="chart"><canvas id="hashrate"></canvas></div></div>
@@ -90,18 +104,38 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 const $=id=>document.getElementById(id), fmt=(v,d=1)=>v==null?'—':Number(v).toFixed(d), dur=s=>{if(s==null)return'—';let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=Math.floor(s%60);if(d)return d+'d '+h+'h '+m+'m';if(h)return h+'h '+m+'m';return m+'m '+x+'s'}, diff=v=>{if(v==null)return'—';if(v>=1e12)return(v/1e12).toFixed(2)+'T';if(v>=1e9)return(v/1e9).toFixed(2)+'G';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1e3)return(v/1e3).toFixed(2)+'K';return String(v)};
 const REFRESH_MS=10000;let lastRefreshAt=0,nextRefreshAt=0;function markRefresh(){lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+REFRESH_MS;refreshClock()}function refreshClock(){if(!lastRefreshAt){$('seen').textContent='Refresh —';return}let next=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000)),stamp=new Date(lastRefreshAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});$('seen').textContent='Refresh '+stamp+' · nächster in '+next+'s'}
 const coverage=(pct,seconds)=>pct==null?'':fmt(pct,0)+'%';
-async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},h=x.hashrate_history||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hash10m').textContent=fmt(d.hashRate_10m/1000,2);$('hash1h').textContent=fmt(h.avg_1h/1000,2);$('hash24h').textContent=fmt(h.avg_24h/1000,2);$('hash7d').textContent=fmt(h.avg_7d/1000,2);$('cover1h').textContent=coverage(h.coverage_pct_1h,h.coverage_1h);$('cover24h').textContent=coverage(h.coverage_pct_24h,h.coverage_24h);$('cover7d').textContent=coverage(h.coverage_pct_7d,h.coverage_7d);$('power').textContent=fmt(d.power)+' W';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Erwartete Hashrate',fmt(d.expectedHashrate/1000,3)+' TH/s'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
+async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},h=x.hashrate_history||{},v=x.voltage_24h||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hash10m').textContent=fmt(d.hashRate_10m/1000,2);$('hash1h').textContent=fmt(h.avg_1h/1000,2);$('hash24h').textContent=fmt(h.avg_24h/1000,2);$('hash7d').textContent=fmt(h.avg_7d/1000,2);$('cover1h').textContent=coverage(h.coverage_pct_1h,h.coverage_1h);$('cover24h').textContent=coverage(h.coverage_pct_24h,h.coverage_24h);$('cover7d').textContent=coverage(h.coverage_pct_7d,h.coverage_7d);$('power').textContent=fmt(d.power)+' W';$('efficiency').textContent=d.efficiencyJTh==null?'— J/TH':fmt(d.efficiencyJTh,1)+' J/TH';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('voltageStats').textContent=v.min==null?'24h —':'24h Min '+fmt(v.min/1000,2)+' · Ø '+fmt(v.avg/1000,2)+' · Max '+fmt(v.max/1000,2)+' V';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Erwartete Hashrate',fmt(d.expectedHashrate/1000,3)+' TH/s'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
 async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
 const chartState={};function axisLabel(ts,range){let d=new Date(ts*1000);return range==='7d'?d.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'}):d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
 function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.automatic?'#ffc857':'#ff5964';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
 async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json(),s=x.samples||[],pts=k=>s.map(v=>({ts:v.ts,v:v[k],gap:!!v.gap})),o={markers:x.markers||[],start:x.start,end:x.end,range};draw('hashrate',[{name:'Hashrate',unit:'GH/s',points:pts('hashrate'),color:'#40e0a0'}],{...o,decimals:0});draw('temperature',[{name:'ASIC',unit:'°C',points:pts('temp'),color:'#ff5964',width:2.5},{name:'VR',unit:'°C',points:pts('vr_temp'),color:'#ffc857',width:2.5,dash:[7,5]}],{...o,min:20,max:85,unit:'°',decimals:0});draw('powerchart',[{name:'Leistung',unit:'W',points:pts('power'),color:'#57a6ff'},{name:'Input',unit:'V',points:pts('voltage'),color:'#40e0a0'}],{...o,min:0,max:40,decimals:1})}
 async function events(){let r=await fetch('/api/events'),x=await r.json();$('events').innerHTML=x.length?x.map(e=>'<div class="event"><span>'+new Date(e.ts*1000).toLocaleString()+'</span><b class="sev-'+e.severity+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<div class="sub" style="padding-top:12px">Noch keine Ereignisse</div>'}
-async function incidentDetail(id){let r=await fetch('/api/incidents/'+id),i=await r.json(),f=i.facts||{},d=(i.diagnostics||[]).at(-1),o=d?.observed||{},domains=o.hashrateMonitor?.asics?.[0]?.domains||[],volts=o.voltage==null?'—':fmt(o.voltage/1000,2);$('incidentDetail').innerHTML='<h2>'+i.kind+'</h2><p>'+i.summary+'</p><div class="detailgrid">'+[['Beginn',new Date(i.started_at*1000).toLocaleString('de-DE')],['Dauer',dur((i.ended_at||Date.now()/1000)-i.started_at)],['Basis',fmt(f.baseline_gh,0)+' GH/s'],['Schwelle',fmt(f.threshold_gh,0)+' GH/s'],['Tiefster Wert',fmt(f.lowest_gh,0)+' GH/s'],['Mittelwert',fmt(f.average_gh,0)+' GH/s'],['Diagnosequelle',d?.source_status||'keine'],['Vor Neustart',fmt(o.hashRate,0)+' GH/s · '+fmt(o.power,1)+' W · '+volts+' V'],['Domains (beobachtet)',domains.length?domains.map(v=>fmt(v,2)).join(' / '):'—']].map(v=>'<div class="detailbox"><span class="sub">'+v[0]+'</span><br><b>'+v[1]+'</b></div>').join('')+'</div><h3>Einordnung</h3><p>Messwerte sind beobachtet. Berechneter Eingangsstrom ist abgeleitet. Eine Ursache wird nur angezeigt, wenn AxeOS sie direkt gemeldet hat; andernfalls bleibt sie unbekannt.</p>';$('incidentDialog').showModal()}
-async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{};return '<div class="event clickable" onclick="incidentDetail('+i.id+')"><span>'+new Date(i.started_at*1000).toLocaleString()+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
+async function incidentDetail(id){
+ let r=await fetch('/api/incidents/'+id),i=await r.json(),f=i.facts||{},fx=i.forensics||{},d=(i.diagnostics||[]).at(-1),o=d?.observed||i.before_sample||{},asic=o.hashrateMonitor?.asics?.[0]||{},domains=asic.domains||[],err=asic.errorCount??fx.error_count,delta=fx.error_count_delta,s=i.samples||[],w=i.window||{start:i.started_at-300,end:(i.ended_at||Date.now()/1000)+300};
+ let showV=v=>v==null?'—':fmt(v/1000,2)+' V',asicParts=[];if(o.actualFrequency!=null)asicParts.push(fmt(o.actualFrequency,0)+' MHz');if(o.coreVoltage!=null)asicParts.push(fmt(o.coreVoltage,0)+' mV konfiguriert');if(o.coreVoltageActual!=null)asicParts.push(showV(o.coreVoltageActual)+' gemessen');
+ let boxes=[['Beginn',new Date(i.started_at*1000).toLocaleString('de-DE')],['Dauer',dur((i.ended_at||Date.now()/1000)-i.started_at)],['Vor Neustart',o.hashRate==null?null:fmt(o.hashRate/1000,2)+' TH/s'+(o.power==null?'':' · '+fmt(o.power,1)+' W')+(o.voltage==null?'':' · '+showV(o.voltage))],['Temperatur',o.temp==null?null:'ASIC '+fmt(o.temp,1)+' °C'+(o.vrTemp==null?'':' · VR '+fmt(o.vrTemp,1)+' °C')],['Domains (AxeOS Raw)',domains.length?domains.map(v=>fmt(v,2)).join(' / ')+' GH/s':null],['ASIC',asicParts.length?asicParts.join(' · '):null],['Error Count',err==null?null:Number(err).toLocaleString('de-DE')+(delta==null?'':' · Δ +'+Number(delta).toLocaleString('de-DE'))],['Input Voltage',fx.voltage_incident==null?null:'Incident '+showV(fx.voltage_incident)+' · 60s Min '+showV(fx.voltage_min_60s)+' · 5m Min '+showV(fx.voltage_min_5m)],['Diagnosequelle',d?.source_status||null],['Recovery',i.recovery||null]].filter(v=>v[1]!=null);
+ $('incidentDetail').innerHTML='<h2>'+i.kind+'</h2><p>'+i.summary+'</p><div class="detailgrid">'+boxes.map(v=>'<div class="detailbox"><span class="sub">'+v[0]+'</span><br><b>'+v[1]+'</b></div>').join('')+'</div><div class="incidentcharts"><div class="incidentchart"><div class="label">Hashrate & Domains</div><canvas id="incidentHash"></canvas></div><div class="incidentchart"><div class="label">Input Voltage</div><canvas id="incidentVoltage"></canvas></div><div class="incidentchart"><div class="label">Power & Temperaturen</div><canvas id="incidentThermal"></canvas></div><div class="incidentchart"><div class="label">Error Count</div><canvas id="incidentErrors"></canvas></div></div><h3>Einordnung</h3><p>Messwerte sind beobachtet. Domain-Werte und Error Count werden unverändert aus AxeOS übernommen. Der Error Count enthält keine Information über die konkrete Fehlerart; ein Counter-Reset wird nicht als negatives Delta dargestellt.</p>';
+ $('incidentDialog').showModal();
+ let markers=[{ts:i.started_at,kind:i.kind,description:'Incident',automatic:false},...(i.events||[]).map(e=>({ts:e.ts,kind:e.kind,description:e.message,automatic:!!e.automatic}))],pts=fn=>s.map(v=>({ts:v.ts,v:fn(v)})),domain=n=>pts(v=>v.hashrateMonitor?.asics?.[0]?.domains?.[n]);
+ draw('incidentHash',[{name:'Gesamt',unit:'GH/s',points:pts(v=>v.hashRate),color:'#40e0a0',width:2.5},...['#57a6ff','#ffc857','#ff5964','#b986ff'].map((c,n)=>({name:'Domain '+n,unit:'GH/s',points:domain(n),color:c}))],{start:w.start,end:w.end,range:'1h',markers,decimals:0});
+ draw('incidentVoltage',[{name:'Input',unit:'V',points:pts(v=>v.voltage==null?null:v.voltage/1000),color:'#40e0a0',width:2.5}],{start:w.start,end:w.end,range:'1h',markers,decimals:2,unit:'V'});
+ draw('incidentThermal',[{name:'Leistung',unit:'W',points:pts(v=>v.power),color:'#57a6ff'},{name:'ASIC',unit:'°C',points:pts(v=>v.temp),color:'#ff5964'},{name:'VR',unit:'°C',points:pts(v=>v.vrTemp),color:'#ffc857',dash:[7,5]}],{start:w.start,end:w.end,range:'1h',markers,decimals:1});
+ draw('incidentErrors',[{name:'Error Count',unit:'',points:pts(v=>v.hashrateMonitor?.asics?.[0]?.errorCount),color:'#b986ff',width:2.5}],{start:w.start,end:w.end,range:'1h',markers,decimals:0});
+}
+async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{},f=i.facts||{},fx=f.forensics||{},domains=f.domains,extra=domains?.length?' · Domains '+domains.map(v=>fmt(v,0)).join(' / '):'',errors=fx.error_count==null?'':' · Errors '+Number(fx.error_count).toLocaleString('de-DE')+(fx.error_count_delta==null?'':' (+'+Number(fx.error_count_delta).toLocaleString('de-DE')+')');return '<div class="event clickable" onclick="incidentDetail('+i.id+')"><span>'+new Date(i.started_at*1000).toLocaleString('de-DE')+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s'+extra+errors+'</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
 async function autoRestartStatus(){let r=await fetch('/api/settings/auto-restart'),a=await r.json(),t=$('autoRestartToggle');t.checked=!!a.enabled;t.disabled=false;$('autoRestartState').textContent=a.enabled?'EIN':'AUS';$('autoRestartState').style.color=a.enabled?'var(--green)':'var(--muted)'}
 $('autoRestartToggle').onchange=async e=>{let t=e.currentTarget,w=t.checked;t.disabled=true;$('autoRestartState').textContent='…';try{let r=await fetch('/api/settings/auto-restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:w})});if(!r.ok)throw new Error();await autoRestartStatus();await current();await events()}catch(err){t.checked=!w;t.disabled=false;$('autoRestartState').textContent='FEHLER';$('autoRestartState').style.color='var(--red)'}};
-async function refreshDashboard(){nextRefreshAt=Date.now()+REFRESH_MS;try{await Promise.all([current(),autoRestartStatus()]);markRefresh()}catch(e){refreshClock()}}document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});refreshDashboard();market();history();events();incidents();setInterval(()=>{refreshDashboard();history(document.querySelector('.tabs button.active').dataset.r);events();incidents()},REFRESH_MS);setInterval(refreshClock,1000);setInterval(market,60000);
+async function profileStatus(){let r=await fetch('/api/settings/mining-profile'),x=await r.json(),p=x.profiles||{},c=x.current||{};$('profileActive').textContent=x.active?p[x.active].label:'Benutzerdefiniert';$('profileCurrent').textContent=(c.frequency??'—')+' MHz · '+(c.coreVoltage??'—')+' mV · Auto-Lüfter '+(c.autofanspeed?'EIN':'AUS')+' · Ziel '+(c.temptarget??'—')+' °C';document.querySelectorAll('#profileButtons button').forEach(b=>b.classList.toggle('active',b.dataset.profile===x.active))}
+document.querySelectorAll('#profileButtons button').forEach(b=>b.onclick=async()=>{let key=b.dataset.profile,custom=key==='oc'||key==='performance',message=custom?'Dieses Profil verwendet benutzerdefinierte OC-Werte außerhalb der vom Gamma angebotenen Standardauswahl. Höhere Leistung kann Netzteil, Spannungswandler und ASIC stärker belasten. Profil wirklich gemeinsam mit Auto-Lüfter und Temperaturziel aktivieren und AxeOS neu starten?':'Profilwerte einschließlich Auto-Lüfter und Temperaturziel gemeinsam speichern und AxeOS neu starten?';if(!confirm(message))return;document.querySelectorAll('#profileButtons button').forEach(x=>x.disabled=true);$('profileHint').textContent='Profil wird gespeichert; AxeOS startet anschließend neu …';try{let r=await fetch('/api/settings/mining-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:key,confirmed:true})}),x=await r.json();if(!r.ok)throw new Error(x.error||'Profilwechsel fehlgeschlagen');$('profileHint').textContent='Neustart läuft. Der aktive Status wird erst nach bestätigten AxeOS-Werten angezeigt.'}catch(e){$('profileHint').textContent=e.message}finally{setTimeout(()=>document.querySelectorAll('#profileButtons button').forEach(x=>x.disabled=false),15000)}});
+const widgetMeta=[['hashrate','Hashrate'],['power','Leistung'],['temperatures','ASIC / VR'],['shares','Shares'],['pool','Pool / Fehler'],['uptime','Laufzeit'],['health','Health & Gerätestatus'],['mining-profile','Mining-Profil'],['bitcoin','Bitcoin & Blockwert'],['public-pool','Mein Public-Pool-Miner'],['hashrate-chart','Hashrate-Chart'],['thermal-chart','Leistung & Temperatur'],['incidents','Incidents'],['events','Ereignisse']];let savedLayouts=[],layoutDirty=false,draggedWidget=null;
+function layoutSnapshot(){return [...document.querySelector('.grid').children].filter(c=>c.classList.contains('card')).map(c=>({id:c.dataset.widget,collapsed:c.classList.contains('is-collapsed'),hidden:c.classList.contains('is-hidden')}))}
+function setLayoutDirty(value=true){layoutDirty=value;$('layoutDirty').textContent=value?'Ungespeicherter Entwurf – zum Behalten unter neuem Namen speichern':'';$('layoutSave').hidden=!document.querySelector('.grid').classList.contains('layout-edit')}
+function applyLayout(layout){let grid=document.querySelector('.grid'),byId=Object.fromEntries([...grid.children].filter(c=>c.dataset.widget).map(c=>[c.dataset.widget,c]));layout.forEach(item=>{let card=byId[item.id];if(!card)return;card.classList.toggle('is-collapsed',!!item.collapsed);card.classList.toggle('is-hidden',!!item.hidden);let collapse=card.querySelector('[data-action="collapse"]'),hide=card.querySelector('[data-action="hide"]');if(collapse)collapse.textContent=item.collapsed?'Öffnen':'Minimieren';if(hide)hide.textContent=item.hidden?'Einblenden':'Ausblenden';grid.appendChild(card)});setLayoutDirty(false);setTimeout(()=>history(document.querySelector('.tabs[data-chart] button.active')?.dataset.r||'1h'),0)}
+function defaultLayout(){return widgetMeta.map(([id])=>({id,collapsed:false,hidden:false}))}function leaveEdit(){let grid=document.querySelector('.grid');grid.classList.remove('layout-edit');[...grid.children].forEach(c=>c.draggable=false);$('layoutEdit').textContent='Anpassen';$('layoutSave').hidden=true}function enterEdit(){let grid=document.querySelector('.grid');grid.classList.add('layout-edit');[...grid.children].filter(c=>c.dataset.widget).forEach(c=>c.draggable=true);$('layoutEdit').textContent='Bearbeitung beenden';$('layoutSave').hidden=false}
+const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');async function reloadLayouts(selectName=''){let r=await fetch('/api/layouts'),x=await r.json();savedLayouts=Array.isArray(x)?x:[];$('layoutSelect').innerHTML='<option value="">Standardlayout (geschützt)</option>'+savedLayouts.map(l=>'<option value="'+esc(l.name)+'">'+esc(l.name)+'</option>').join('');$('layoutSelect').value=selectName}
+async function setupLayouts(){let grid=document.querySelector('.grid'),cards=[...grid.children].filter(c=>c.classList.contains('card'));grid.id='dashboardGrid';let bar=document.createElement('div');bar.className='layoutbar';bar.innerHTML='<span class="label">Dashboard-Layout</span><select id="layoutSelect"><option value="">Standardlayout (geschützt)</option></select><button id="layoutEdit">Anpassen</button><button id="layoutSave" hidden>Als neues Layout speichern</button><button id="layoutDefault">Standard wiederherstellen</button><span class="layoutdirty" id="layoutDirty"></span>';grid.before(bar);cards.forEach((card,index)=>{let [id,title]=widgetMeta[index];card.dataset.widget=id;let body=document.createElement('div');body.className='widget-body';while(card.firstChild)body.appendChild(card.firstChild);let controls=document.createElement('div');controls.className='widgetbar';controls.innerHTML='<b>↕ '+title+'</b><button type="button" data-action="collapse">Minimieren</button><button type="button" data-action="hide">Ausblenden</button>';card.append(controls,body);controls.onclick=e=>{let action=e.target.dataset.action;if(!action)return;if(action==='collapse'){card.classList.toggle('is-collapsed');e.target.textContent=card.classList.contains('is-collapsed')?'Öffnen':'Minimieren'}else{card.classList.toggle('is-hidden');e.target.textContent=card.classList.contains('is-hidden')?'Einblenden':'Ausblenden'}setLayoutDirty()};card.ondragstart=()=>{if(!grid.classList.contains('layout-edit'))return false;draggedWidget=card;card.classList.add('dragging')};card.ondragend=()=>{card.classList.remove('dragging');[...grid.children].forEach(c=>c.classList.remove('dragover'));draggedWidget=null};card.ondragover=e=>{if(draggedWidget&&draggedWidget!==card){e.preventDefault();card.classList.add('dragover')}};card.ondragleave=()=>card.classList.remove('dragover');card.ondrop=e=>{e.preventDefault();card.classList.remove('dragover');if(draggedWidget&&draggedWidget!==card){let rect=card.getBoundingClientRect();grid.insertBefore(draggedWidget,e.clientY<rect.top+rect.height/2?card:card.nextSibling);setLayoutDirty()}}});await reloadLayouts(localStorage.getItem('bitaxeLayout')||'');let selected=$('layoutSelect').value,stored=savedLayouts.find(l=>l.name===selected);applyLayout(stored?.layout||defaultLayout());$('layoutSelect').onchange=e=>{if(layoutDirty&&!confirm('Ungespeicherte Änderungen verwerfen?')){e.target.value=localStorage.getItem('bitaxeLayout')||'';return}let item=savedLayouts.find(l=>l.name===e.target.value);applyLayout(item?.layout||defaultLayout());localStorage.setItem('bitaxeLayout',e.target.value);leaveEdit()};$('layoutEdit').onclick=()=>grid.classList.contains('layout-edit')?leaveEdit():enterEdit();$('layoutDefault').onclick=()=>{if(layoutDirty&&!confirm('Entwurf verwerfen und Standardlayout wiederherstellen?'))return;applyLayout(defaultLayout());$('layoutSelect').value='';localStorage.removeItem('bitaxeLayout');leaveEdit()};$('layoutSave').onclick=async()=>{let name=prompt('Name für das neue Layout:','');if(name==null)return;name=name.trim();if(!name){alert('Zum Speichern ist ein eigener Layoutname erforderlich.');return}let r=await fetch('/api/layouts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,layout:layoutSnapshot()})}),x=await r.json();if(!r.ok){alert(x.error||'Layout konnte nicht gespeichert werden.');return}await reloadLayouts(x.name);localStorage.setItem('bitaxeLayout',x.name);setLayoutDirty(false);leaveEdit()}}
+async function refreshDashboard(){nextRefreshAt=Date.now()+REFRESH_MS;try{await Promise.all([current(),autoRestartStatus(),profileStatus()]);markRefresh()}catch(e){refreshClock()}}document.querySelectorAll('.tabs[data-chart] button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs[data-chart] button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs[data-chart] button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});setupLayouts();refreshDashboard();market();history();events();incidents();setInterval(()=>{refreshDashboard();history(document.querySelector('.tabs[data-chart] button.active').dataset.r);events();incidents()},REFRESH_MS);setInterval(refreshClock,1000);setInterval(market,60000);
 </script></body></html>'''
 
 
@@ -138,6 +172,11 @@ def migrate_schema(con):
           ON incident_diagnostics(incident_id,captured_at);
         """)
         con.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(2,?)", (now(),))
+    if 3 not in applied:
+        con.execute("""CREATE TABLE IF NOT EXISTS dashboard_layouts(
+            name TEXT PRIMARY KEY COLLATE NOCASE, layout_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)""")
+        con.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(3,?)", (now(),))
 
 
 def init_db():
@@ -287,10 +326,92 @@ def calculated_current(data):
         return None
 
 
+def mining_efficiency(power_w, hashrate_gh):
+    """Return J/TH from observed watts and GH/s, or None for invalid input."""
+    try:
+        power = float(power_w)
+        terahash = float(hashrate_gh) / 1000.0
+        return power / terahash if power >= 0 and terahash > 0 else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def safe_payload(data):
     payload = dict(data or {})
     payload["calculatedCurrent"] = calculated_current(payload)
+    payload["efficiencyJTh"] = mining_efficiency(payload.get("power"), payload.get("hashRate"))
     return payload
+
+
+def error_count(data):
+    asics = ((data or {}).get("hashrateMonitor") or {}).get("asics") or []
+    value = asics[0].get("errorCount") if asics else None
+    return value if isinstance(value, (int, float)) else None
+
+
+def stable_error_baseline(started_at):
+    """Last healthy pre-incident counter; counter resets are handled by the caller."""
+    with db() as con:
+        rows = con.execute("SELECT payload FROM samples WHERE ts<? ORDER BY ts DESC LIMIT 60",
+                           (started_at,)).fetchall()
+    for row in rows:
+        sample = json.loads(row["payload"])
+        domains = (((sample.get("hashrateMonitor") or {}).get("asics") or [{}])[0].get("domains"))
+        if (sample.get("hashRate") or 0) > 0 and domains and all(
+                isinstance(value, (int, float)) and value > 1 for value in domains):
+            value = error_count(sample)
+            if value is not None:
+                return value
+    return None
+
+
+def incident_metrics(started_at, snapshot=None):
+    """Neutral, database-backed pre-incident measurements and counter delta."""
+    current = safe_payload(snapshot or {})
+    with db() as con:
+        rows = con.execute("SELECT ts,voltage,power,temp,vr_temp,payload FROM samples "
+                           "WHERE ts BETWEEN ? AND ? ORDER BY ts",
+                           (started_at - 300, started_at)).fetchall()
+    def minimum(field, seconds):
+        values = [row[field] for row in rows
+                  if row["ts"] >= started_at - seconds and isinstance(row[field], (int, float))]
+        return min(values) if values else None
+    observed_error = error_count(current)
+    asics = ((current.get("hashrateMonitor") or {}).get("asics") or [])
+    domains = asics[0].get("domains") if asics else None
+    baseline_error = stable_error_baseline(started_at)
+    delta = (observed_error - baseline_error
+             if observed_error is not None and baseline_error is not None
+             and observed_error >= baseline_error else None)
+    return {
+        "voltage_incident": current.get("voltage"),
+        "voltage_min_60s": minimum("voltage", 60),
+        "voltage_min_5m": minimum("voltage", 300),
+        "power_min_60s": minimum("power", 60),
+        "power_min_5m": minimum("power", 300),
+        "temp_min_60s": minimum("temp", 60),
+        "temp_min_5m": minimum("temp", 300),
+        "vr_temp_min_60s": minimum("vr_temp", 60),
+        "vr_temp_min_5m": minimum("vr_temp", 300),
+        "error_count": observed_error,
+        "error_count_baseline": baseline_error,
+        "error_count_delta": delta,
+        "domains": list(domains) if isinstance(domains, list) else None,
+    }
+
+
+def voltage_summary(hours=24, at=None):
+    end = int(at or now())
+    with db() as con:
+        row = con.execute("SELECT MIN(voltage),AVG(voltage),MAX(voltage) FROM samples "
+                          "WHERE ts BETWEEN ? AND ? AND voltage IS NOT NULL",
+                          (end - hours * 3600, end)).fetchone()
+    return {"min": row[0], "avg": row[1], "max": row[2]} if row and row[0] is not None else {}
+
+
+def incident_window(started_at, ended_at=None, at=None):
+    return {"start": int(started_at) - 300,
+            "end": int(ended_at or at or now()) + 300}
 
 
 def pre_crash_snapshot(ts, seconds=300):
@@ -347,6 +468,14 @@ def update_incident(incident_id, **changes):
         con.execute(f"UPDATE incidents SET {','.join(clauses)} WHERE id=?", values)
 
 
+def persisted_incident_forensics(incident_id):
+    with db() as con:
+        row = con.execute("SELECT facts FROM incidents WHERE id=?", (incident_id,)).fetchone()
+    if not row or not row["facts"]:
+        return None
+    return (json.loads(row["facts"]) or {}).get("forensics")
+
+
 def attach_incident_sample(incident_id, ts, phase, data):
     with db() as con:
         con.execute("INSERT OR REPLACE INTO incident_samples VALUES(?,?,?,?)",
@@ -390,7 +519,7 @@ def chart_markers(start, end):
             FROM incidents WHERE started_at<=? AND COALESCE(ended_at,?)>=?""", (end, end, start)).fetchall()
         events = con.execute("""SELECT id,ts,NULL ended_at,kind,message description,automatic
             FROM events WHERE ts BETWEEN ? AND ? AND kind IN
-            ('HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
+            ('ASIC_DOMAIN_STALL_DETECTED','HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
              'OFFLINE','REBOOT','RECOVERED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
             (start, end)).fetchall()
     return sorted([dict(row) for row in (*incidents, *events)], key=lambda item: item["ts"])
@@ -826,6 +955,35 @@ def request_axeos_restart():
         return response.status
 
 
+def axeos_system_url(api_url=API_URL):
+    parsed = urlparse(api_url)
+    return urlunparse((parsed.scheme, parsed.netloc, "/api/system", "", "", ""))
+
+
+def update_axeos_profile(profile):
+    payload = {key: profile[key] for key in
+               ("frequency", "coreVoltage", "temptarget", "autofanspeed", "overclockEnabled")}
+    req = urllib.request.Request(
+        axeos_system_url(), data=json.dumps(payload).encode(), method="PATCH",
+        headers={"Accept": "application/json", "Content-Type": "application/json",
+                 "User-Agent": "BitaxeMonitor/1.0"})
+    with urllib.request.urlopen(req, timeout=8) as response:
+        if response.status < 200 or response.status >= 300:
+            raise RuntimeError("AxeOS rejected profile")
+        return response.status
+
+
+def active_mining_profile(data):
+    for key, profile in MINING_PROFILES.items():
+        if (data.get("frequency") == profile["frequency"]
+                and data.get("coreVoltage") == profile["coreVoltage"]
+                and data.get("temptarget") == profile["temptarget"]
+                and int(data.get("autofanspeed") or 0) == 1
+                and int(data.get("overclockEnabled") or 0) == profile["overclockEnabled"]):
+            return key
+    return None
+
+
 def state_value(key, default=None):
     with db() as con:
         row = con.execute("SELECT value FROM monitor_state WHERE key=?", (key,)).fetchone()
@@ -839,6 +997,28 @@ def set_state_value(key, value):
 
 def auto_restart_enabled():
     return AUTO_RESTART_ENABLED or state_value("auto_restart_enabled", "false").lower() == "true"
+
+
+def validate_dashboard_layout(layout):
+    if not isinstance(layout, list) or len(layout) != len(LAYOUT_WIDGETS):
+        raise ValueError("layout must contain every widget exactly once")
+    result, seen = [], set()
+    for item in layout:
+        if not isinstance(item, dict) or item.get("id") not in LAYOUT_WIDGETS or item["id"] in seen:
+            raise ValueError("invalid or duplicate widget")
+        seen.add(item["id"])
+        result.append({"id": item["id"], "collapsed": bool(item.get("collapsed")),
+                       "hidden": bool(item.get("hidden"))})
+    if seen != set(LAYOUT_WIDGETS):
+        raise ValueError("layout is incomplete")
+    return result
+
+
+def validate_layout_name(value):
+    name = str(value or "").strip()
+    if not name or len(name) > 40 or name.casefold() in {"standard", "standardlayout"}:
+        raise ValueError("Bitte einen eigenen Layoutnamen mit maximal 40 Zeichen verwenden")
+    return name
 
 
 def auto_restart_outcome(attempt, elapsed, recovered):
@@ -867,6 +1047,15 @@ def detect(old, new):
     if (isinstance(old_uptime, (int, float)) and isinstance(new_uptime, (int, float))
             and new_uptime + 30 < old_uptime):
         add_event("REBOOT", "warning", "Neustart erkannt: " + str(new.get("resetReason") or "Uptime-Reset"))
+    pending_profile = state_value("pending_mining_profile")
+    if pending_profile and active_mining_profile(new) == pending_profile and (new.get("uptimeSeconds") or 9999) < 300:
+        profile = MINING_PROFILES[pending_profile]
+        add_event("MINING_PROFILE_ACTIVE", "info",
+                  f"Mining-Profil {profile['label']} nach AxeOS-Neustart bestätigt",
+                  details={"profile": pending_profile, "frequency": profile["frequency"],
+                           "coreVoltage": profile["coreVoltage"], "temptarget": profile["temptarget"],
+                           "autofanspeed": 1})
+        set_state_value("pending_mining_profile", "")
     if (new.get("sharesRejected") or 0) > (old.get("sharesRejected") or 0):
         reason = new.get("sharesRejectedReasons")
         suffix = f" · Grund: {reason}" if reason else ""
@@ -1007,6 +1196,7 @@ def poller():
                          "duration_seconds": stamp - trigger_since,
                          "domains": (confirmed_domain_stall or {}).get("domains"),
                          "stalled_domain_indexes": (confirmed_domain_stall or {}).get("stalled_indexes")}
+                facts["forensics"] = incident_metrics(incident_start, data)
                 if degradation:
                     facts.update({"loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                   "threshold_gh": degradation["threshold"],
@@ -1043,12 +1233,15 @@ def poller():
                              and (auto_kind != "ASIC_DOMAIN_STALL" or domains_recovered(data)))
                 auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
                 auto_uptime_reset = auto_uptime_reset or rebooted
+                stored_forensics = persisted_incident_forensics(incident_id)
                 facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
                          "attempt": auto_attempt, "uptime_reset": auto_uptime_reset, "trigger": auto_kind,
                          "observed_gh": hashrate,
-                         "domains": list(domain_register_paths(data).values()),
+                         "domains": ((stored_forensics or {}).get("domains")
+                                     or list(domain_register_paths(data).values())),
                          "baseline_gh": expected, "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
-                         "recovery_threshold_gh": expected * 0.80 if expected else None}
+                         "recovery_threshold_gh": expected * 0.80 if expected else None,
+                         "forensics": stored_forensics}
                 update_incident(incident_id, facts=facts,
                                 summary="Automatischer AxeOS-Neustart ausgelöst; Wiederherstellung wird geprüft")
                 outcome = auto_restart_outcome(
@@ -1199,6 +1392,22 @@ class Handler(BaseHTTPRequestHandler):
                                    "cooldown_seconds": AUTO_RESTART_COOLDOWN,
                                    "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
                                    "locked": state_value("auto_restart_locked", "false").lower() == "true"})
+        if p.path == "/api/layouts":
+            with db() as con:
+                rows = con.execute("SELECT name,layout_json,created_at,updated_at "
+                                   "FROM dashboard_layouts ORDER BY name COLLATE NOCASE").fetchall()
+            return self.send_json([{"name": row["name"], "layout": json.loads(row["layout_json"]),
+                                    "created_at": row["created_at"], "updated_at": row["updated_at"]}
+                                   for row in rows])
+        if p.path == "/api/settings/mining-profile":
+            with db() as con:
+                row = con.execute("SELECT payload FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
+            data = safe_payload(json.loads(row["payload"])) if row else {}
+            return self.send_json({"active": active_mining_profile(data), "current": {
+                "frequency": data.get("frequency"), "coreVoltage": data.get("coreVoltage"),
+                "temptarget": data.get("temptarget"), "autofanspeed": data.get("autofanspeed"),
+                "overclockEnabled": data.get("overclockEnabled")},
+                "profiles": MINING_PROFILES})
         if p.path == "/api/current":
             with db() as con:
                 row = con.execute("SELECT ts,payload FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
@@ -1221,6 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"online": age < POLL_SECONDS * 3, "state": state,
                                     "age_seconds": age, "summary": summary, "data": data,
                                     "hashrate_history": cached_historical_hashrate(),
+                                    "voltage_24h": voltage_summary(),
                                     "auto_restart": {"enabled": auto_restart_enabled(),
                                         "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                         "after_seconds": AUTO_RESTART_AFTER_SECONDS,
@@ -1252,14 +1462,15 @@ class Handler(BaseHTTPRequestHandler):
             with db() as con:
                 row = con.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
                 if row:
-                    window_end = (row["ended_at"] or now()) + 600
+                    window = incident_window(row["started_at"], row["ended_at"])
+                    window_start, window_end = window["start"], window["end"]
                     telemetry = con.execute("SELECT ts,payload FROM samples WHERE ts BETWEEN ? AND ? ORDER BY ts",
-                                            (row["started_at"] - 600, window_end)).fetchall()
+                                            (window_start, window_end)).fetchall()
                     diagnostics = con.execute("SELECT * FROM incident_diagnostics WHERE incident_id=? ORDER BY captured_at",
                                               (incident_id,)).fetchall()
                     related_events = con.execute("""SELECT ts,kind,severity,message,automatic,details FROM events
                         WHERE incident_id=? OR ts BETWEEN ? AND ? ORDER BY ts""",
-                        (incident_id, row["started_at"] - 30, window_end)).fetchall()
+                        (incident_id, window_start, window_end)).fetchall()
             if not row:
                 return self.send_json({"error": "not found"}, 404)
             item = dict(row)
@@ -1269,6 +1480,11 @@ class Handler(BaseHTTPRequestHandler):
             item["diagnostics"] = [{"captured_at": d["captured_at"], "source_status": d["source_status"],
                 "observed": json.loads(d["observed_json"]), "derived": json.loads(d["derived_json"]),
                 "field_info": json.loads(d["raw_field_names_json"])} for d in diagnostics]
+            snapshot = ((item.get("diagnostics") or [{}])[-1].get("observed")
+                        if item.get("diagnostics") else None)
+            item["forensics"] = (item.get("facts") or {}).get("forensics") or incident_metrics(
+                item["started_at"], snapshot or item.get("before_sample"))
+            item["window"] = {"start": window_start, "end": window_end}
             item["events"] = [{**dict(e), "details": json.loads(e["details"] or "{}")} for e in related_events]
             return self.send_json(item)
         if p.path == "/api/market":
@@ -1294,13 +1510,56 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        if urlparse(self.path).path != "/api/settings/auto-restart":
+        path = urlparse(self.path).path
+        if path not in {"/api/settings/auto-restart", "/api/settings/mining-profile", "/api/layouts"}:
             return self.send_error(404)
         try:
-            length = min(1024, int(self.headers.get("Content-Length", "0")))
+            length = min(65536, int(self.headers.get("Content-Length", "0")))
             payload = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self.send_json({"error": "invalid JSON"}, 400)
+        if path == "/api/settings/mining-profile":
+            key = str(payload.get("profile") or "").lower()
+            profile = MINING_PROFILES.get(key)
+            if not profile:
+                return self.send_json({"error": "Unbekanntes Profil"}, 400)
+            if payload.get("confirmed") is not True:
+                return self.send_json({"error": "Profilwechsel muss ausdrücklich bestätigt werden"}, 400)
+            try:
+                current = fetch_bitaxe_info()
+                if str(current.get("ASICModel")) != "BM1370" or str(current.get("boardVersion")) != "601":
+                    return self.send_json({"error": "Profile sind nur für Gamma 601 / BM1370 freigegeben"}, 409)
+                if current.get("power_fault") or current.get("hardware_fault") or current.get("overheat_mode"):
+                    return self.send_json({"error": "Profilwechsel wegen aktivem Hardware-, Power- oder Temperaturfehler gesperrt"}, 409)
+                details = {"profile": key, "label": profile["label"], "frequency": profile["frequency"],
+                           "coreVoltage": profile["coreVoltage"], "temptarget": profile["temptarget"],
+                           "autofanspeed": 1, "custom_oc": profile["custom"]}
+                add_event("MINING_PROFILE_REQUESTED", "warning" if profile["custom"] else "info",
+                          f"Mining-Profil {profile['label']} angefordert; AxeOS-Neustart folgt", automatic=False,
+                          details=details)
+                update_axeos_profile(profile)
+                add_event("MINING_PROFILE_SAVED", "info",
+                          f"Mining-Profil {profile['label']} vollständig in AxeOS gespeichert", details=details)
+                set_state_value("pending_mining_profile", key)
+                request_axeos_restart()
+                return self.send_json({"status": "restarting", "profile": key, "settings": details}, 202)
+            except (urllib.error.URLError, TimeoutError, RuntimeError) as error:
+                add_event("MINING_PROFILE_FAILED", "critical", "Mining-Profil konnte nicht vollständig aktiviert werden",
+                          details={"profile": key, "error_type": type(error).__name__})
+                return self.send_json({"error": "AxeOS konnte das Profil nicht vollständig übernehmen"}, 502)
+        if path == "/api/layouts":
+            try:
+                name = validate_layout_name(payload.get("name"))
+                layout = validate_dashboard_layout(payload.get("layout"))
+                stamp = now()
+                with db() as con:
+                    con.execute("INSERT INTO dashboard_layouts(name,layout_json,created_at,updated_at) VALUES(?,?,?,?)",
+                                (name, json.dumps(layout, separators=(",", ":")), stamp, stamp))
+            except sqlite3.IntegrityError:
+                return self.send_json({"error": "Dieser Layoutname existiert bereits"}, 409)
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
+            return self.send_json({"name": name, "layout": layout}, 201)
         if not isinstance(payload.get("enabled"), bool):
             return self.send_json({"error": "enabled must be boolean"}, 400)
         set_state_value("auto_restart_enabled", str(payload["enabled"]).lower())
