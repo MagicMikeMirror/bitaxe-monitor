@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- Show unavailable legacy pre-restart voltage as an em dash instead of `NaN`.
+
 ## 1.2.0
 
 - Use true timestamp axes for 1h, 24h and 7d charts, preserving telemetry gaps and adding incident markers.
