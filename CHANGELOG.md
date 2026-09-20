@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3
+
+- Use compact coverage labels in the hashrate card so 1h, 24h and 7d values never overlap.
+
 ## 1.2.2
 
 - Calculate 1h, 24h and 7d hashrate averages exclusively from persistent SQLite telemetry.
