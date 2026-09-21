@@ -236,6 +236,9 @@ class IncidentClassificationTests(unittest.TestCase):
 
     def test_profile_ui_and_handler_do_not_restart_axeos(self):
         self.assertIn("ohne Neustart", APP.HTML)
+        self.assertIn("Benutzerdefinierte OC-Werte", APP.HTML)
+        self.assertIn("b.title=tip", APP.HTML)
+        self.assertIn("setAttribute('aria-label',tip)", APP.HTML)
         profile_handler = inspect.getsource(APP.Handler.do_POST)
         profile_section = profile_handler.split('if path == "/api/settings/mining-profile":', 1)[1]
         profile_section = profile_section.split('if path == "/api/layouts":', 1)[0]
