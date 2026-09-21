@@ -26,7 +26,7 @@ events without Grafana, InfluxDB or additional containers.
 - Clickable incident forensics with synchronized telemetry from five minutes before detection through five minutes after recovery
 - BM1370 Error Count and reset-safe delta from the last stable pre-incident sample
 - Immutable standard dashboard layout with drag-and-drop, minimize/hide controls and named SQLite-backed custom layouts that can be updated or copied
-- Gamma 601 mining profiles: Eco (490/1100/65), Standard (525/1150/65), OC (650/1180/60) and Performance (725/1220/57), always with automatic fan control and applied without restarting AxeOS
+- Gamma 601 mining profiles: Eco (490/1100), Standard (525/1150), OC (650/1180) and Performance (725/1220), all with automatic fan control disabled and fan speed fixed at 100%, applied without restarting AxeOS
 - Responsive dark dashboard for TV, desktop and mobile
 - Single multi-architecture container with no Python dependencies
 
@@ -108,8 +108,8 @@ are stored in the persistent SQLite database.
 
 ## Mining profiles
 
-The four Gamma 601 / BM1370 profiles apply frequency, core voltage, automatic
-fan control and target temperature together in one AxeOS request. Profile
+The four Gamma 601 / BM1370 profiles apply frequency, core voltage, disabled
+automatic fan control and a fixed 100% fan speed together in one AxeOS request. Profile
 changes take effect without an AxeOS restart and are confirmed from subsequent
 telemetry. OC and Performance use custom values and therefore require an
 explicit warning confirmation in the dashboard.

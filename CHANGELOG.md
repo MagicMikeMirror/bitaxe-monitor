@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.3
+
+- Disable automatic fan control and set a fixed 100% fan speed in every mining profile.
+
 ## 1.3.2
 
 - Allow an existing named custom dashboard layout to be updated in place while keeping the standard layout immutable.

@@ -203,13 +203,15 @@ class IncidentClassificationTests(unittest.TestCase):
             profile = APP.MINING_PROFILES[key]
             self.assertEqual((profile["frequency"], profile["coreVoltage"],
                               profile["temptarget"], profile["overclockEnabled"]), values)
-            self.assertEqual(profile["autofanspeed"], 1)
+            self.assertEqual(profile["autofanspeed"], 0)
+            self.assertEqual(profile["fanspeed"], 100)
 
     def test_active_profile_requires_frequency_voltage_and_cooling_match(self):
         standard = {"frequency": 525, "coreVoltage": 1150, "temptarget": 65,
-                    "autofanspeed": 1, "overclockEnabled": 1}
+                    "autofanspeed": 0, "fanspeed": 100, "overclockEnabled": 1}
         self.assertEqual(APP.active_mining_profile(standard), "standard")
-        self.assertIsNone(APP.active_mining_profile(standard | {"autofanspeed": 0}))
+        self.assertIsNone(APP.active_mining_profile(standard | {"autofanspeed": 1}))
+        self.assertIsNone(APP.active_mining_profile(standard | {"fanspeed": 90}))
         self.assertIsNone(APP.active_mining_profile(standard | {"temptarget": 60}))
 
     def test_profile_update_sends_one_complete_patch(self):
@@ -229,7 +231,7 @@ class IncidentClassificationTests(unittest.TestCase):
         finally:
             APP.urllib.request.urlopen = original
         self.assertEqual(captured, {"frequency": 650, "coreVoltage": 1180,
-                                   "temptarget": 60, "autofanspeed": 1,
+                                   "temptarget": 60, "autofanspeed": 0, "fanspeed": 100,
                                    "overclockEnabled": 1})
 
     def test_profile_ui_and_handler_do_not_restart_axeos(self):
