@@ -77,10 +77,10 @@ LAYOUT_WIDGETS = (
 )
 
 MINING_PROFILES = {
-    "eco": {"label": "Eco", "frequency": 490, "coreVoltage": 1100, "temptarget": 65, "autofanspeed": 1, "overclockEnabled": 1, "custom": False},
-    "standard": {"label": "Standard", "frequency": 525, "coreVoltage": 1150, "temptarget": 65, "autofanspeed": 1, "overclockEnabled": 1, "custom": False},
-    "oc": {"label": "OC", "frequency": 650, "coreVoltage": 1180, "temptarget": 60, "autofanspeed": 1, "overclockEnabled": 1, "custom": True},
-    "performance": {"label": "Performance", "frequency": 725, "coreVoltage": 1220, "temptarget": 57, "autofanspeed": 1, "overclockEnabled": 1, "custom": True},
+    "eco": {"label": "Eco", "frequency": 490, "coreVoltage": 1100, "temptarget": 65, "autofanspeed": 0, "fanspeed": 100, "overclockEnabled": 1, "custom": False},
+    "standard": {"label": "Standard", "frequency": 525, "coreVoltage": 1150, "temptarget": 65, "autofanspeed": 0, "fanspeed": 100, "overclockEnabled": 1, "custom": False},
+    "oc": {"label": "OC", "frequency": 650, "coreVoltage": 1180, "temptarget": 60, "autofanspeed": 0, "fanspeed": 100, "overclockEnabled": 1, "custom": True},
+    "performance": {"label": "Performance", "frequency": 725, "coreVoltage": 1220, "temptarget": 57, "autofanspeed": 0, "fanspeed": 100, "overclockEnabled": 1, "custom": True},
 }
 
 HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
@@ -94,7 +94,7 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 </style></head><body><main class="wrap"><div class="top"><div><div class="brand">₿ BITAXE GAMMA 601</div><div class="sub" id="ver">AxeOS</div></div><div class="status"><span class="dot" id="dot"></span><b id="state">WARTE AUF DATEN</b><span class="refresh" id="seen">Refresh —</span></div></div>
 <section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="hashstats"><div class="hashstat">10m<b id="hash10m">—</b></div><div class="hashstat">1h<b id="hash1h">—</b><small id="cover1h"></small></div><div class="hashstat">24h<b id="hash24h">—</b><small id="cover24h"></small></div><div class="hashstat">7d<b id="hash7d">—</b><small id="cover7d"></small></div></div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="efficiency">— J/TH</div><div class="sub" id="voltage">—</div><div class="sub" id="voltageStats">24h —</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
 <div class="card" style="grid-column:1/-1"><div class="healthhead"><div class="label">Health & Gerätestatus</div><label class="autoswitch" title="Automatischen AxeOS-Neustart bei anhaltendem Hashrate-Einbruch ein- oder ausschalten"><input id="autoRestartToggle" type="checkbox" disabled><span class="switchtrack"></span><span>Auto-Restart</span><span class="switchstate" id="autoRestartState">—</span></label></div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div><div class="healthdetails" id="healthDetails"></div></div>
-<div class="card wide"><div class="label">Mining-Profil</div><div class="value" id="profileActive" style="font-size:24px">—</div><div class="sub" id="profileCurrent">Frequenz · Spannung · Kühlung</div><div class="tabs" id="profileButtons" style="margin-top:12px"><button data-profile="eco">Eco</button><button data-profile="standard">Standard</button><button data-profile="oc">OC</button><button data-profile="performance">Performance</button></div><div class="sub" id="profileHint">Profilwechsel überträgt Frequenz, Spannung und Kühlung gemeinsam – ohne Neustart.</div></div>
+<div class="card wide"><div class="label">Mining-Profil</div><div class="value" id="profileActive" style="font-size:24px">—</div><div class="sub" id="profileCurrent">Frequenz · Spannung · Kühlung</div><div class="tabs" id="profileButtons" style="margin-top:12px"><button data-profile="eco">Eco</button><button data-profile="standard">Standard</button><button data-profile="oc">OC</button><button data-profile="performance">Performance</button></div><div class="sub" id="profileHint">Alle Profile verwenden feste 100 % Lüfterleistung – ohne Neustart.</div></div>
 <div class="card wide"><div class="label">Bitcoin & Blockwert</div><div class="value" id="btcEur">—</div><div class="sub"><span id="priceUpdated">Aktueller BTC/EUR-Kurs</span> · <span class="pricechange" id="priceChange">24h —</span></div><div class="pricechart"><canvas id="btcPriceChart"></canvas></div><div class="facts"><div class="fact" title="Neu erzeugte Bitcoin pro Block gemäß aktuellem Halving-Zyklus."><span class="sub">Block-Subvention</span><b id="blockSubsidy">— BTC</b></div><div class="fact" title="Gebühren der Transaktionen im aktuellen Blocktemplate. Sie kommen zusätzlich zur Block-Subvention hinzu."><span class="sub">Transaktionsgebühren</span><b id="blockFees">—</b></div><div class="fact" title="Der aktuell deiner Mining-Adresse zugewiesene Coinbase-Wert inklusive Transaktionsgebühren."><span class="sub" id="blockValueLabel">Aktueller Blockwert</span><b id="blockBtc">— BTC</b><span class="sub" id="blockEur">—</span></div></div><div class="sub">Blockhöhe <span id="blockHeight">—</span></div></div>
 <div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Hashrate</div><div class="sub">GH/s</div></div><div class="tabs" data-chart="hashrate"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="chart"><canvas id="hashrate"></canvas></div></div>
@@ -126,8 +126,8 @@ async function incidentDetail(id){
 async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{},f=i.facts||{},fx=f.forensics||{},domains=f.domains,extra=domains?.length?' · Domains '+domains.map(v=>fmt(v,0)).join(' / '):'',errors=fx.error_count==null?'':' · Errors '+Number(fx.error_count).toLocaleString('de-DE')+(fx.error_count_delta==null?'':' (+'+Number(fx.error_count_delta).toLocaleString('de-DE')+')');return '<div class="event clickable" onclick="incidentDetail('+i.id+')"><span>'+new Date(i.started_at*1000).toLocaleString('de-DE')+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s'+extra+errors+'</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
 async function autoRestartStatus(){let r=await fetch('/api/settings/auto-restart'),a=await r.json(),t=$('autoRestartToggle');t.checked=!!a.enabled;t.disabled=false;$('autoRestartState').textContent=a.enabled?'EIN':'AUS';$('autoRestartState').style.color=a.enabled?'var(--green)':'var(--muted)'}
 $('autoRestartToggle').onchange=async e=>{let t=e.currentTarget,w=t.checked;t.disabled=true;$('autoRestartState').textContent='…';try{let r=await fetch('/api/settings/auto-restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:w})});if(!r.ok)throw new Error();await autoRestartStatus();await current();await events()}catch(err){t.checked=!w;t.disabled=false;$('autoRestartState').textContent='FEHLER';$('autoRestartState').style.color='var(--red)'}};
-async function profileStatus(){let r=await fetch('/api/settings/mining-profile'),x=await r.json(),p=x.profiles||{},c=x.current||{};$('profileActive').textContent=x.active?p[x.active].label:'Benutzerdefiniert';$('profileCurrent').textContent=(c.frequency??'—')+' MHz · '+(c.coreVoltage??'—')+' mV · Auto-Lüfter '+(c.autofanspeed?'EIN':'AUS')+' · Ziel '+(c.temptarget??'—')+' °C';document.querySelectorAll('#profileButtons button').forEach(b=>b.classList.toggle('active',b.dataset.profile===x.active))}
-document.querySelectorAll('#profileButtons button').forEach(b=>b.onclick=async()=>{let key=b.dataset.profile,custom=key==='oc'||key==='performance',message=custom?'Dieses Profil verwendet benutzerdefinierte OC-Werte außerhalb der vom Gamma angebotenen Standardauswahl. Höhere Leistung kann Netzteil, Spannungswandler und ASIC stärker belasten. Profil wirklich gemeinsam mit Auto-Lüfter und Temperaturziel aktivieren?':'Profilwerte einschließlich Auto-Lüfter und Temperaturziel gemeinsam übernehmen?';if(!confirm(message))return;document.querySelectorAll('#profileButtons button').forEach(x=>x.disabled=true);$('profileHint').textContent='Profilwerte werden gemeinsam an AxeOS übertragen …';try{let r=await fetch('/api/settings/mining-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:key,confirmed:true})}),x=await r.json();if(!r.ok)throw new Error(x.error||'Profilwechsel fehlgeschlagen');$('profileHint').textContent='Profil gespeichert – kein Neustart erforderlich.';setTimeout(profileStatus,1500)}catch(e){$('profileHint').textContent=e.message}finally{document.querySelectorAll('#profileButtons button').forEach(x=>x.disabled=false)}});
+async function profileStatus(){let r=await fetch('/api/settings/mining-profile'),x=await r.json(),p=x.profiles||{},c=x.current||{};$('profileActive').textContent=x.active?p[x.active].label:'Benutzerdefiniert';$('profileCurrent').textContent=(c.frequency??'—')+' MHz · '+(c.coreVoltage??'—')+' mV · Lüfter '+(c.autofanspeed?'AUTO':(c.fanspeed??'—')+' %');document.querySelectorAll('#profileButtons button').forEach(b=>b.classList.toggle('active',b.dataset.profile===x.active))}
+document.querySelectorAll('#profileButtons button').forEach(b=>b.onclick=async()=>{let key=b.dataset.profile,custom=key==='oc'||key==='performance',message=custom?'Dieses Profil verwendet benutzerdefinierte OC-Werte außerhalb der vom Gamma angebotenen Standardauswahl. Höhere Leistung kann Netzteil, Spannungswandler und ASIC stärker belasten. Profil wirklich mit fester Lüfterleistung von 100 % aktivieren?':'Profilwerte mit fester Lüfterleistung von 100 % gemeinsam übernehmen?';if(!confirm(message))return;document.querySelectorAll('#profileButtons button').forEach(x=>x.disabled=true);$('profileHint').textContent='Profilwerte und 100 % Lüfterleistung werden an AxeOS übertragen …';try{let r=await fetch('/api/settings/mining-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:key,confirmed:true})}),x=await r.json();if(!r.ok)throw new Error(x.error||'Profilwechsel fehlgeschlagen');$('profileHint').textContent='Profil gespeichert – Lüfter fest auf 100 %, kein Neustart erforderlich.';setTimeout(profileStatus,1500)}catch(e){$('profileHint').textContent=e.message}finally{document.querySelectorAll('#profileButtons button').forEach(x=>x.disabled=false)}});
 const widgetMeta=[['hashrate','Hashrate'],['power','Leistung'],['temperatures','ASIC / VR'],['shares','Shares'],['pool','Pool / Fehler'],['uptime','Laufzeit'],['health','Health & Gerätestatus'],['mining-profile','Mining-Profil'],['bitcoin','Bitcoin & Blockwert'],['public-pool','Mein Public-Pool-Miner'],['hashrate-chart','Hashrate-Chart'],['thermal-chart','Leistung & Temperatur'],['incidents','Incidents'],['events','Ereignisse']];let savedLayouts=[],layoutDirty=false,draggedWidget=null;
 function layoutSnapshot(){return [...document.querySelector('.grid').children].filter(c=>c.classList.contains('card')).map(c=>({id:c.dataset.widget,collapsed:c.classList.contains('is-collapsed'),hidden:c.classList.contains('is-hidden')}))}
 function setLayoutDirty(value=true){layoutDirty=value;let editing=document.querySelector('.grid').classList.contains('layout-edit'),named=!!$('layoutSelect')?.value;$('layoutDirty').textContent=value?(named?'Ungespeicherte Änderungen':'Ungespeicherter Entwurf – zum Behalten als neues Layout speichern'):'';$('layoutUpdate').hidden=!editing||!named;$('layoutSave').hidden=!editing}
@@ -962,7 +962,7 @@ def axeos_system_url(api_url=API_URL):
 
 def update_axeos_profile(profile):
     payload = {key: profile[key] for key in
-               ("frequency", "coreVoltage", "temptarget", "autofanspeed", "overclockEnabled")}
+               ("frequency", "coreVoltage", "temptarget", "autofanspeed", "fanspeed", "overclockEnabled")}
     req = urllib.request.Request(
         axeos_system_url(), data=json.dumps(payload).encode(), method="PATCH",
         headers={"Accept": "application/json", "Content-Type": "application/json",
@@ -978,7 +978,8 @@ def active_mining_profile(data):
         if (data.get("frequency") == profile["frequency"]
                 and data.get("coreVoltage") == profile["coreVoltage"]
                 and data.get("temptarget") == profile["temptarget"]
-                and int(data.get("autofanspeed") or 0) == 1
+                and int(data.get("autofanspeed") or 0) == profile["autofanspeed"]
+                and int(data.get("fanspeed") or 0) == profile["fanspeed"]
                 and int(data.get("overclockEnabled") or 0) == profile["overclockEnabled"]):
             return key
     return None
@@ -1067,7 +1068,7 @@ def detect(old, new):
                   f"Mining-Profil {profile['label']} durch AxeOS-Telemetrie bestätigt",
                   details={"profile": pending_profile, "frequency": profile["frequency"],
                            "coreVoltage": profile["coreVoltage"], "temptarget": profile["temptarget"],
-                           "autofanspeed": 1})
+                           "autofanspeed": profile["autofanspeed"], "fanspeed": profile["fanspeed"]})
         set_state_value("pending_mining_profile", "")
     if (new.get("sharesRejected") or 0) > (old.get("sharesRejected") or 0):
         reason = new.get("sharesRejectedReasons")
@@ -1419,6 +1420,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"active": active_mining_profile(data), "current": {
                 "frequency": data.get("frequency"), "coreVoltage": data.get("coreVoltage"),
                 "temptarget": data.get("temptarget"), "autofanspeed": data.get("autofanspeed"),
+                "fanspeed": data.get("fanspeed"),
                 "overclockEnabled": data.get("overclockEnabled")},
                 "profiles": MINING_PROFILES})
         if p.path == "/api/current":
@@ -1546,7 +1548,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json({"error": "Profilwechsel wegen aktivem Hardware-, Power- oder Temperaturfehler gesperrt"}, 409)
                 details = {"profile": key, "label": profile["label"], "frequency": profile["frequency"],
                            "coreVoltage": profile["coreVoltage"], "temptarget": profile["temptarget"],
-                           "autofanspeed": 1, "custom_oc": profile["custom"]}
+                           "autofanspeed": profile["autofanspeed"], "fanspeed": profile["fanspeed"],
+                           "custom_oc": profile["custom"]}
                 add_event("MINING_PROFILE_REQUESTED", "warning" if profile["custom"] else "info",
                           f"Mining-Profil {profile['label']} angefordert", automatic=False,
                           details=details)
