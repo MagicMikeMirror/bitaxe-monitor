@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4
+
+- Add profile-button tooltips with frequency, core voltage, fan mode and custom-OC status sourced from the live profile API.
+
 ## 1.3.3
 
 - Disable automatic fan control and set a fixed 100% fan speed in every mining profile.
