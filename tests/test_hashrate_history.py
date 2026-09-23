@@ -157,6 +157,35 @@ class TimeWeightedHashrateTests(unittest.TestCase):
             finally:
                 APP.DB_PATH = original
 
+    def test_user_pause_keeps_raw_zero_samples_but_excludes_them_from_performance_average(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "pause-history.sqlite3")
+            try:
+                APP.init_db()
+                end = 10_000
+                for stamp in range(end - 600, end - 400, 10):
+                    APP.save({"hashRate": 1000, "miningPaused": False}, stamp)
+                APP.add_event("USER_PAUSED", "info", "pause", end - 400)
+                for stamp in range(end - 400, end - 200, 10):
+                    APP.save({"hashRate": 0, "miningPaused": True}, stamp)
+                APP.add_event("USER_RESUMED", "info", "resume", end - 200)
+                for stamp in range(end - 200, end, 10):
+                    APP.save({"hashRate": 1000, "miningPaused": False}, stamp)
+                summary = APP.historical_hashrate(end)
+                markers = APP.chart_markers(end - 600, end)
+                with APP.db() as con:
+                    zero_samples = con.execute("SELECT COUNT(*) FROM samples WHERE hashrate=0").fetchone()[0]
+                self.assertEqual(zero_samples, 20)
+                self.assertAlmostEqual(summary["avg_1h"], 1000)
+                self.assertEqual(summary["planned_pause_seconds_1h"], 200)
+                self.assertEqual(summary["user_pauses_1h"], 1)
+                pause = next(marker for marker in markers if marker["kind"] == "USER_PAUSED")
+                self.assertTrue(pause["planned"])
+                self.assertEqual((pause["ts"], pause["ended_at"]), (end - 400, end - 200))
+            finally:
+                APP.DB_PATH = original
+
 
 if __name__ == "__main__":
     unittest.main()

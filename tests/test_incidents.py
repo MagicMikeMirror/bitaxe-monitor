@@ -99,6 +99,74 @@ class IncidentClassificationTests(unittest.TestCase):
                        {"miningPaused": True}, {"power": 5}, {"uptimeSeconds": 30}):
             self.assertIsNone(APP.hashrate_degradation(base | change))
 
+    def test_user_pause_and_resume_are_persistent_non_incident_events_with_grace(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "pause.sqlite3")
+            try:
+                APP.init_db()
+                APP.record_user_pause_transition({"miningPaused": False}, {"miningPaused": True}, 1000)
+                self.assertTrue(APP.user_pause_active())
+                context = APP.offline_event_context()
+                self.assertTrue(context["planned"])
+                self.assertEqual(context["severity"], "info")
+                APP.record_user_pause_transition({"miningPaused": True}, {"miningPaused": False}, 1100)
+                self.assertFalse(APP.user_pause_active())
+                self.assertTrue(APP.user_pause_grace_active(1101))
+                self.assertFalse(APP.user_pause_grace_active(1100 + APP.USER_RESUME_GRACE_SECONDS))
+                with APP.db() as con:
+                    events = con.execute("SELECT kind FROM events ORDER BY ts").fetchall()
+                    incidents = con.execute("SELECT COUNT(*) FROM incidents").fetchone()[0]
+                self.assertEqual([row[0] for row in events], ["USER_PAUSED", "USER_RESUMED"])
+                self.assertEqual(incidents, 0)
+            finally:
+                APP.DB_PATH = original
+
+    def test_final_restart_guard_cancels_when_user_pauses(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            original_path = APP.DB_PATH
+            original_fetch = APP.fetch_bitaxe_info
+            original_restart = APP.request_axeos_restart
+            APP.DB_PATH = str(pathlib.Path(directory) / "guard.sqlite3")
+            restarted = []
+            try:
+                APP.init_db()
+                APP.fetch_bitaxe_info = lambda: {"miningPaused": True, "hashRate": 0}
+                APP.request_axeos_restart = lambda: restarted.append(True)
+                _, _, status = APP.restart_with_persisted_evidence(None, {}, {"reason": "test"}, 2000)
+                self.assertEqual(status, "cancelled_user_paused")
+                self.assertEqual(restarted, [])
+                with APP.db() as con:
+                    kinds = [row[0] for row in con.execute("SELECT kind FROM events ORDER BY ts")]
+                self.assertIn("USER_PAUSED", kinds)
+                self.assertIn("AUTO_RECOVERY_CANCELLED_USER_PAUSED", kinds)
+            finally:
+                APP.DB_PATH = original_path
+                APP.fetch_bitaxe_info = original_fetch
+                APP.request_axeos_restart = original_restart
+
+    def test_pause_resume_across_reboot_keeps_samples_and_reboot_marker(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            original_path = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "pause-reboot.sqlite3")
+            try:
+                APP.init_db()
+                before = {"miningPaused": True, "hashRate": 0, "uptimeSeconds": 5000}
+                after = {"miningPaused": False, "hashRate": 1100, "uptimeSeconds": 20,
+                         "resetReason": "Power-on reset"}
+                APP.record_user_pause_transition({}, before, 3000)
+                APP.save(before, 3000)
+                APP.detect(before, after, 3100)
+                APP.save(after, 3100)
+                with APP.db() as con:
+                    self.assertEqual(con.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 2)
+                    kinds = [row[0] for row in con.execute("SELECT kind FROM events ORDER BY ts,id")]
+                self.assertIn("USER_PAUSED", kinds)
+                self.assertIn("USER_RESUMED", kinds)
+                self.assertIn("REBOOT", kinds)
+            finally:
+                APP.DB_PATH = original_path
+
     def test_restart_url_is_derived_without_retaining_info_path(self):
         self.assertEqual(APP.axeos_restart_url("http://192.168.1.131/api/system/info"),
                          "http://192.168.1.131/api/system/restart")

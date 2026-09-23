@@ -19,6 +19,8 @@ events without Grafana, InfluxDB or additional containers.
 - Persistent flight recorder with five-minute pre-incident snapshots and min/max/average values
 - Correlated incident classification instead of repeated low-hashrate alarms
 - Robust ONLINE / DEGRADED / OFFLINE / RECOVERING state machine
+- Persistent USER_PAUSED / USER_RESUMED tracking with a restart-safe resume grace period
+- Planned-pause chart spans and performance averages that exclude deliberate pause time without altering raw telemetry
 - Input current calculated from power and input voltage (`I = P / U`)
 - Current mining efficiency calculated from observed power and hashrate (`W / TH/s = J/TH`)
 - Neutral 24-hour input-voltage minimum, average and maximum from persistent telemetry
@@ -142,6 +144,14 @@ environment variables: `POST /api/settings/auto-restart` with JSON
 in the health summary. A switch in the health and device-status card changes the
 same setting directly from the dashboard.
 
+An AxeOS pause (`miningPaused=true`) is stored as `USER_PAUSED`, not as a
+technical incident. Hashrate and domain-stall detection as well as automatic
+recovery remain suppressed throughout the pause and a short resume grace period.
+If the device becomes unreachable after a deliberate pause, the monitor records
+the observed offline/online sequence without assigning an unproven failure cause.
+Zero-hashrate samples remain intact in SQLite and visible in charts; deliberate
+pause time is reported separately and excluded from technical performance averages.
+
 The original AxeOS `current` value is retained in the allow-listed diagnostic
 payload, but the displayed input current is calculated from measured watts and
 input voltage. ESP-Miner v2.15.1 documents `current` as milliamps and AxeOS divides
@@ -151,7 +161,7 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.3.2`, and
+Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.3.5`, and
 recreate the container. Startup only adds new SQLite tables; existing samples and
 events are not rewritten or deleted.
 
