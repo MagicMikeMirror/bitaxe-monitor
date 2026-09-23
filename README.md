@@ -161,7 +161,7 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.3.5`, and
+Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.3.6`, and
 recreate the container. Startup only adds new SQLite tables; existing samples and
 events are not rewritten or deleted.
 

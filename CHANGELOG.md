@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.6
+
+- Allow a specifically user-confirmed legacy incident to be retained for audit but reclassified as a planned USER_PAUSED interval.
+- Represent the corrected interval through USER_PAUSED / USER_RESUMED events and exclude it from the technical incident list and statistics.
+
 ## 1.3.5
 
 - Track deliberate AxeOS mining pauses as persistent USER_PAUSED / USER_RESUMED events rather than technical incidents.
