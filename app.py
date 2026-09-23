@@ -21,6 +21,7 @@ HASHRATE_LOW = float(os.getenv("HASHRATE_LOW_GH", "750"))
 EXPECTED_HASHRATE = float(os.getenv("EXPECTED_HASHRATE_GH", "0"))
 OFFLINE_AFTER_POLLS = max(2, int(os.getenv("OFFLINE_AFTER_POLLS", "3")))
 RECOVERY_POLLS = max(1, int(os.getenv("RECOVERY_POLLS", "3")))
+USER_RESUME_GRACE_SECONDS = max(30, POLL_SECONDS * RECOVERY_POLLS)
 STALL_AFTER_POLLS = max(2, int(os.getenv("STALL_AFTER_POLLS", "3")))
 IDLE_POWER_W = float(os.getenv("IDLE_POWER_W", "8"))
 VOLTAGE_LOW_V = float(os.getenv("VOLTAGE_LOW_V", "4.75"))
@@ -90,7 +91,7 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 .status{flex-wrap:wrap;justify-content:flex-end}.refresh{font-variant-numeric:tabular-nums;white-space:nowrap}
 .healthhead{display:flex;align-items:center;justify-content:space-between;gap:16px}.autoswitch{display:inline-flex;align-items:center;gap:9px;color:var(--muted);font-size:13px;cursor:pointer;white-space:nowrap}.autoswitch input{position:absolute;opacity:0;pointer-events:none}.switchtrack{width:42px;height:24px;border-radius:14px;background:#273343;border:1px solid #39485c;position:relative;transition:.2s}.switchtrack:after{content:"";position:absolute;width:18px;height:18px;left:2px;top:2px;border-radius:50%;background:#9aa7b8;transition:.2s}.autoswitch input:checked+.switchtrack{background:#176c51;border-color:var(--green)}.autoswitch input:checked+.switchtrack:after{transform:translateX(18px);background:var(--green)}.autoswitch input:focus-visible+.switchtrack{outline:2px solid var(--blue);outline-offset:2px}.autoswitch input:disabled+.switchtrack{opacity:.55}.switchstate{min-width:38px;color:var(--text);font-weight:650}@media(max-width:620px){.healthhead{align-items:flex-start}.autoswitch{white-space:normal}}
 .event.clickable{cursor:pointer}.event.clickable:hover{background:#152030}dialog{width:min(1180px,96vw);max-height:90vh;overflow:auto;background:#0d141e;color:var(--text);border:1px solid #34445a;border-radius:16px;padding:20px}dialog::backdrop{background:#000b}.detailgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.detailbox{background:#101b28;padding:10px;border-radius:9px;overflow-wrap:anywhere}.incidentcharts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.incidentchart{height:190px;background:#0a111a;border:1px solid #202b3a;border-radius:10px;padding:9px}.incidentchart canvas{width:100%;height:155px}.closebtn{float:right;background:#223047;color:white;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}@media(max-width:720px){.detailgrid,.incidentcharts{grid-template-columns:1fr}}
-.layoutbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px}.layoutbar select,.layoutbar button{background:#182231;color:#dce5f1;border:1px solid #34445a;border-radius:8px;padding:7px 10px}.layoutbar button{cursor:pointer}.layoutdirty{color:var(--yellow);font-size:12px}.widgetbar{display:none;align-items:center;gap:7px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #34445a}.widgetbar b{margin-right:auto}.widgetbar button{background:#1b293a;color:#dce5f1;border:0;border-radius:6px;padding:5px 8px;cursor:pointer}.grid.layout-edit .widgetbar,.grid:not(.layout-edit)>.card.is-collapsed .widgetbar{display:flex}.grid.layout-edit>.card{outline:1px dashed #52657d;cursor:grab}.grid.layout-edit>.card.is-hidden{display:block;opacity:.38}.grid:not(.layout-edit)>.card.is-hidden,.card[hidden]{display:none!important}.grid:not(.layout-edit)>.card.is-collapsed{align-self:start}.grid:not(.layout-edit)>.card.is-collapsed .widgetbar{margin:0;padding:0;border:0}.grid:not(.layout-edit)>.card.is-collapsed [data-action="hide"]{display:none}.card.is-collapsed .widget-body{display:none}.card.dragging{opacity:.35}.card.dragover{outline:2px solid var(--blue)!important}.widget-body{display:contents}
+.layoutbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px}.layoutbar select,.layoutbar button{background:#182231;color:#dce5f1;border:1px solid #34445a;border-radius:8px;padding:7px 10px}.layoutbar button{cursor:pointer}.layoutdirty{color:var(--yellow);font-size:12px}.widgetbar{display:none;align-items:center;gap:7px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #34445a}.widgetbar b{margin-right:auto}.widgetbar button{background:#1b293a;color:#dce5f1;border:0;border-radius:6px;padding:5px 8px;cursor:pointer}.grid.layout-edit .widgetbar,.grid:not(.layout-edit)>.card.is-collapsed .widgetbar{display:flex}.grid.layout-edit>.card{outline:1px dashed #52657d;cursor:grab}.grid.layout-edit>.card.is-hidden{display:block;opacity:.38}.grid:not(.layout-edit)>.card.is-hidden,.card[hidden]{display:none!important}.grid:not(.layout-edit)>.card.is-collapsed{align-self:start}.grid:not(.layout-edit)>.card.is-collapsed .widgetbar{margin:0;padding:0;border:0}.grid:not(.layout-edit)>.card.is-collapsed [data-action="hide"]{display:none}.card.is-collapsed .widget-body{display:none}.card.dragging{opacity:.35}.card.dragover{outline:2px solid var(--blue)!important}.widget-body{display:contents}.dot.pause{background:var(--blue)}
 </style></head><body><main class="wrap"><div class="top"><div><div class="brand">₿ BITAXE GAMMA 601</div><div class="sub" id="ver">AxeOS</div></div><div class="status"><span class="dot" id="dot"></span><b id="state">WARTE AUF DATEN</b><span class="refresh" id="seen">Refresh —</span></div></div>
 <section class="grid"><div class="card"><div class="label">Hashrate</div><div class="value" id="hash">—</div><div class="hashstats"><div class="hashstat">10m<b id="hash10m">—</b></div><div class="hashstat">1h<b id="hash1h">—</b><small id="cover1h"></small></div><div class="hashstat">24h<b id="hash24h">—</b><small id="cover24h"></small></div><div class="hashstat">7d<b id="hash7d">—</b><small id="cover7d"></small></div></div></div><div class="card"><div class="label">Leistung</div><div class="value" id="power">—</div><div class="sub" id="efficiency">— J/TH</div><div class="sub" id="voltage">—</div><div class="sub" id="voltageStats">24h —</div></div><div class="card"><div class="label">ASIC / VR</div><div class="value" id="temp">—</div><div class="sub" id="vr">—</div></div><div class="card"><div class="label">Shares</div><div class="value" id="shares">—</div><div class="sub" id="best">—</div></div><div class="card"><div class="label">Pool / Fehler</div><div class="value" id="pool">—</div><div class="sub" id="errors">—</div></div><div class="card"><div class="label">Laufzeit</div><div class="value" id="uptime">—</div><div class="sub" id="wifi">—</div></div>
 <div class="card" style="grid-column:1/-1"><div class="healthhead"><div class="label">Health & Gerätestatus</div><label class="autoswitch" title="Automatischen AxeOS-Neustart bei anhaltendem Hashrate-Einbruch ein- oder ausschalten"><input id="autoRestartToggle" type="checkbox" disabled><span class="switchtrack"></span><span>Auto-Restart</span><span class="switchstate" id="autoRestartState">—</span></label></div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div><div class="healthdetails" id="healthDetails"></div></div>
@@ -102,13 +103,14 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 <div class="card wide"><div class="label">Incidents</div><div class="events" id="incidents"></div></div><div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div></section></main><dialog id="incidentDialog"><button class="closebtn" onclick="$('incidentDialog').close()">Schließen</button><div id="incidentDetail"></div></dialog>
 <script>
 const $=id=>document.getElementById(id), fmt=(v,d=1)=>v==null?'—':Number(v).toFixed(d), dur=s=>{if(s==null)return'—';let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=Math.floor(s%60);if(d)return d+'d '+h+'h '+m+'m';if(h)return h+'h '+m+'m';return m+'m '+x+'s'}, diff=v=>{if(v==null)return'—';if(v>=1e12)return(v/1e12).toFixed(2)+'T';if(v>=1e9)return(v/1e9).toFixed(2)+'G';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1e3)return(v/1e3).toFixed(2)+'K';return String(v)};
+new MutationObserver(()=>{$('dot').classList.toggle('pause',$('state').textContent==='USER PAUSED')}).observe($('state'),{childList:true});
 const REFRESH_MS=10000;let lastRefreshAt=0,nextRefreshAt=0;function markRefresh(){lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+REFRESH_MS;refreshClock()}function refreshClock(){if(!lastRefreshAt){$('seen').textContent='Refresh —';return}let next=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000)),stamp=new Date(lastRefreshAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});$('seen').textContent='Refresh '+stamp+' · nächster in '+next+'s'}
 const coverage=(pct,seconds)=>pct==null?'':fmt(pct,0)+'%';
 async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},h=x.hashrate_history||{},v=x.voltage_24h||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hash10m').textContent=fmt(d.hashRate_10m/1000,2);$('hash1h').textContent=fmt(h.avg_1h/1000,2);$('hash24h').textContent=fmt(h.avg_24h/1000,2);$('hash7d').textContent=fmt(h.avg_7d/1000,2);$('cover1h').textContent=coverage(h.coverage_pct_1h,h.coverage_1h);$('cover24h').textContent=coverage(h.coverage_pct_24h,h.coverage_24h);$('cover7d').textContent=coverage(h.coverage_pct_7d,h.coverage_7d);$('power').textContent=fmt(d.power)+' W';$('efficiency').textContent=d.efficiencyJTh==null?'— J/TH':fmt(d.efficiencyJTh,1)+' J/TH';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('voltageStats').textContent=v.min==null?'24h —':'24h Min '+fmt(v.min/1000,2)+' · Ø '+fmt(v.avg/1000,2)+' · Max '+fmt(v.max/1000,2)+' V';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Erwartete Hashrate',fmt(d.expectedHashrate/1000,3)+' TH/s'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
 async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
 const chartState={};function axisLabel(ts,range){let d=new Date(ts*1000);return range==='7d'?d.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'}):d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
-function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.automatic?'#ffc857':'#ff5964';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
+function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).filter(m=>m.planned&&m.ended_at).forEach(m=>{ctx.fillStyle='#57a6ff22';ctx.fillRect(px(Math.max(opt.start,m.ts)),top,Math.max(2,px(Math.min(opt.end,m.ended_at))-px(Math.max(opt.start,m.ts))),h-top-bottom)});(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.planned?'#57a6ff':(m.automatic?'#ffc857':'#ff5964');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
 async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json(),s=x.samples||[],pts=k=>s.map(v=>({ts:v.ts,v:v[k],gap:!!v.gap})),o={markers:x.markers||[],start:x.start,end:x.end,range};draw('hashrate',[{name:'Hashrate',unit:'GH/s',points:pts('hashrate'),color:'#40e0a0'}],{...o,decimals:0});draw('temperature',[{name:'ASIC',unit:'°C',points:pts('temp'),color:'#ff5964',width:2.5},{name:'VR',unit:'°C',points:pts('vr_temp'),color:'#ffc857',width:2.5,dash:[7,5]}],{...o,min:20,max:85,unit:'°',decimals:0});draw('powerchart',[{name:'Leistung',unit:'W',points:pts('power'),color:'#57a6ff'},{name:'Input',unit:'V',points:pts('voltage'),color:'#40e0a0'}],{...o,min:0,max:40,decimals:1})}
 async function events(){let r=await fetch('/api/events'),x=await r.json();$('events').innerHTML=x.length?x.map(e=>'<div class="event"><span>'+new Date(e.ts*1000).toLocaleString()+'</span><b class="sev-'+e.severity+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<div class="sub" style="padding-top:12px">Noch keine Ereignisse</div>'}
 async function incidentDetail(id){
@@ -231,7 +233,27 @@ def merge_intervals(intervals, start, end):
     return [tuple(value) for value in merged]
 
 
-def time_weighted_hashrate(samples, start, end, offline_intervals=(), carry_seconds=None):
+def interval_seconds(intervals, start, end):
+    return sum(right - left for left, right in merge_intervals(intervals, start, end))
+
+
+def interval_overlap_seconds(intervals_a, intervals_b, start, end):
+    left_values = merge_intervals(intervals_a, start, end)
+    right_values = merge_intervals(intervals_b, start, end)
+    total = left_index = right_index = 0
+    while left_index < len(left_values) and right_index < len(right_values):
+        left_a, right_a = left_values[left_index]
+        left_b, right_b = right_values[right_index]
+        total += max(0, min(right_a, right_b) - max(left_a, left_b))
+        if right_a <= right_b:
+            left_index += 1
+        else:
+            right_index += 1
+    return total
+
+
+def time_weighted_hashrate(samples, start, end, offline_intervals=(), carry_seconds=None,
+                           excluded_intervals=()):
     """Integrate observed GH/s over covered time; confirmed downtime contributes zero."""
     carry = carry_seconds or POLL_SECONDS * 3
     samples = sorted((int(ts), float(rate or 0)) for ts, rate in samples if ts <= end)
@@ -259,8 +281,29 @@ def time_weighted_hashrate(samples, start, end, offline_intervals=(), carry_seco
             measured_index += 1
         else:
             offline_index += 1
-    covered = measured_seconds + offline_seconds - overlap_seconds
+    covered_intervals = [(left, right) for left, right, _ in measured] + offline
+    excluded_covered = interval_overlap_seconds(covered_intervals, excluded_intervals, start, end)
+    blocked = list(offline) + list(excluded_intervals)
+    work = sum(((measured_right - measured_left) - interval_overlap_seconds(
+        [(measured_left, measured_right)], blocked, start, end)) * rate
+        for measured_left, measured_right, rate in measured)
+    covered = measured_seconds + offline_seconds - overlap_seconds - excluded_covered
     return {"average": None if not covered else work / covered, "coverage": int(covered)}
+
+
+def planned_pause_intervals(con, start, end):
+    intervals = []
+    open_since = None
+    for event in con.execute("""SELECT ts,kind FROM events
+        WHERE kind IN ('USER_PAUSED','USER_RESUMED') AND ts<=? ORDER BY ts,id""", (end,)):
+        if event["kind"] == "USER_PAUSED":
+            open_since = event["ts"] if open_since is None else open_since
+        elif open_since is not None:
+            intervals.append((open_since, event["ts"]))
+            open_since = None
+    if open_since is not None:
+        intervals.append((open_since, end))
+    return merge_intervals(intervals, start, end)
 
 
 def confirmed_downtime(con, start, end):
@@ -295,15 +338,22 @@ def historical_hashrate(at=None):
             rows = con.execute("SELECT ts,hashrate FROM samples WHERE ts>=? AND ts<=? ORDER BY ts",
                                (query_start, end)).fetchall()
             downtime = confirmed_downtime(con, start, end)
+            pauses = planned_pause_intervals(con, start, end)
             measured_start = max(start, first) if first is not None else end
             calculation = time_weighted_hashrate(
                 [(row["ts"], row["hashrate"]) for row in rows], measured_start, end,
-                downtime, POLL_SECONDS * 3)
+                downtime, POLL_SECONDS * 3, pauses)
             coverage = calculation["coverage"]
+            pause_seconds = interval_seconds(pauses, measured_start, end)
+            eligible_seconds = max(0, seconds - pause_seconds)
+            pause_count = con.execute("SELECT COUNT(*) FROM events WHERE kind='USER_PAUSED' AND ts BETWEEN ? AND ?",
+                                      (start, end)).fetchone()[0]
             result[f"avg_{label}"] = calculation["average"]
             result[f"coverage_{label}"] = coverage
-            result[f"coverage_pct_{label}"] = min(100.0, coverage * 100 / seconds)
-            result[f"complete_{label}"] = coverage >= seconds - POLL_SECONDS * 3
+            result[f"coverage_pct_{label}"] = min(100.0, coverage * 100 / eligible_seconds) if eligible_seconds else 100.0
+            result[f"planned_pause_seconds_{label}"] = pause_seconds
+            result[f"user_pauses_{label}"] = pause_count
+            result[f"complete_{label}"] = coverage >= eligible_seconds - POLL_SECONDS * 3
     return result
 
 
@@ -522,7 +572,12 @@ def chart_markers(start, end):
             ('ASIC_DOMAIN_STALL_DETECTED','HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
              'OFFLINE','REBOOT','RECOVERED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
             (start, end)).fetchall()
-    return sorted([dict(row) for row in (*incidents, *events)], key=lambda item: item["ts"])
+        pauses = planned_pause_intervals(con, start, end)
+    pause_markers = [{"id": None, "ts": left, "ended_at": right, "kind": "USER_PAUSED",
+                      "description": "Bewusste Mining-Pause", "automatic": 0, "planned": True}
+                     for left, right in pauses]
+    return sorted([dict(row) for row in (*incidents, *events)] + pause_markers,
+                  key=lambda item: item["ts"])
 
 
 def backfill_historical_incidents(days=30):
@@ -689,6 +744,13 @@ def freshest_restart_evidence(fallback):
 def restart_with_persisted_evidence(incident_id, fallback, details, captured_at=None):
     """The restart request is deliberately unreachable until the DB transaction commits."""
     evidence, source_status = freshest_restart_evidence(fallback)
+    if evidence.get("miningPaused"):
+        stamp = int(captured_at or now())
+        record_user_pause_transition({}, evidence, stamp)
+        add_event("AUTO_RECOVERY_CANCELLED_USER_PAUSED", "info",
+                  "Automatischer Neustart abgebrochen: Mining wurde über AxeOS pausiert",
+                  stamp, automatic=True, details={"reason": "miningPaused=true"})
+        return evidence, source_status, "cancelled_user_paused"
     persist_pre_restart_snapshot(incident_id, evidence, source_status, details, captured_at)
     try:
         request_axeos_restart()
@@ -770,8 +832,6 @@ def observed_cause(data):
         return "Hardware Fault detected: " + str(data["hardware_fault"])
     if data.get("overheat_mode"):
         return "Überhitzungsschutz aktiv"
-    if data.get("miningPaused"):
-        return "Mining pausiert"
     return None
 
 
@@ -816,7 +876,9 @@ def metrics_text(data):
 
 def health_summary(state, data, last_incident=None):
     parts = []
-    if state == "ONLINE":
+    if state == "USER PAUSED":
+        parts.append("Mining bewusst über AxeOS pausiert")
+    elif state == "ONLINE":
         parts.append(f"Mining stabil · {(data.get('hashRate') or 0) / 1000:.2f} TH/s")
     elif state == "MINING STALLED":
         parts.append("Mining gestoppt, Controller weiterhin erreichbar")
@@ -996,6 +1058,54 @@ def set_state_value(key, value):
         con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES(?,?)", (key, str(value)))
 
 
+def user_pause_active():
+    return state_value("user_pause_active", "false").lower() == "true"
+
+
+def user_pause_grace_active(at=None):
+    return int(at or now()) < int(state_value("user_pause_grace_until", "0") or 0)
+
+
+def record_user_pause_transition(old, new, stamp=None):
+    """Persist observed AxeOS pause transitions without creating a technical incident."""
+    stamp = int(stamp or now())
+    paused = bool((new or {}).get("miningPaused"))
+    was_paused = user_pause_active()
+    if paused and not was_paused:
+        add_event("USER_PAUSED", "info", "Mining wurde über AxeOS pausiert.", stamp,
+                  details={"observed": {"miningPaused": True}})
+        set_state_value("user_pause_active", "true")
+        set_state_value("user_pause_started_at", stamp)
+        set_state_value("user_pause_grace_until", "0")
+        return "paused"
+    if not paused and was_paused:
+        add_event("USER_RESUMED", "info", "Mining wurde fortgesetzt.", stamp,
+                  details={"observed": {"miningPaused": False},
+                           "grace_seconds": USER_RESUME_GRACE_SECONDS})
+        set_state_value("user_pause_active", "false")
+        set_state_value("user_pause_grace_until", stamp + USER_RESUME_GRACE_SECONDS)
+        return "resumed"
+    return None
+
+
+def discard_transient_auto_incident(incident_id):
+    """Remove an incident created in the same cycle when a final pause guard cancels recovery."""
+    if not incident_id:
+        return
+    with db() as con:
+        con.execute("DELETE FROM incident_samples WHERE incident_id=?", (incident_id,))
+        con.execute("DELETE FROM incident_diagnostics WHERE incident_id=?", (incident_id,))
+        con.execute("DELETE FROM events WHERE incident_id=?", (incident_id,))
+        con.execute("DELETE FROM incidents WHERE id=?", (incident_id,))
+
+
+def offline_event_context():
+    planned = user_pause_active()
+    return {"planned": planned, "severity": "info" if planned else "critical",
+            "message": ("Bitaxe nach Benutzerpause nicht erreichbar" if planned
+                        else "Bitaxe seit mehreren Polls nicht erreichbar")}
+
+
 def auto_restart_enabled():
     return AUTO_RESTART_ENABLED or state_value("auto_restart_enabled", "false").lower() == "true"
 
@@ -1043,9 +1153,11 @@ def auto_restart_outcome(attempt, elapsed, recovered):
     return "retry" if attempt < AUTO_RESTART_MAX_ATTEMPTS else "lock"
 
 
-def detect(old, new):
+def detect(old, new, stamp=None):
+    stamp = int(stamp or now())
+    record_user_pause_transition(old or {}, new, stamp)
     if not old:
-        add_event("START", "info", "Monitoring gestartet")
+        add_event("START", "info", "Monitoring gestartet", stamp)
         return
     checks = [
         ("POWER", (old.get("power") or 0) <= POWER_HIGH < (new.get("power") or 0), "warning", f"Leistung über {POWER_HIGH:g} W"),
@@ -1134,19 +1246,44 @@ def poller():
                     miner_address = address
             data = clean(raw)
             old = previous()
-            detect(old, data)
             stamp = now()
+            was_user_paused = user_pause_active()
+            previous_failures = failures
+            detect(old, data, stamp)
             save(data, stamp)
             failures = 0
             successes += 1
+            pause_now = bool(data.get("miningPaused"))
+            pause_guard = pause_now or user_pause_grace_active(stamp)
+            if previous_failures >= OFFLINE_AFTER_POLLS and was_user_paused:
+                add_event("RECOVERED", "info", "Bitaxe nach Benutzerpause wieder erreichbar", stamp,
+                          details={"after_user_pause": True})
             hashrate = data.get("hashRate") or 0
             fact = observed_cause(data)
             rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
-            stopped = (hashrate <= 10 and not data.get("miningPaused")) or bool(fact)
+            stopped = not pause_guard and ((hashrate <= 10) or bool(fact))
+            if pause_guard:
+                stopped_polls = 0
+                degraded_since = None
+                degradation_baseline = None
+                degradation_values = []
+                domain_stall_since = None
+                domain_stall_polls = 0
+            if pause_now and auto_mode:
+                add_event("AUTO_RECOVERY_CANCELLED_USER_PAUSED", "info",
+                          "Weitere Auto-Recovery abgebrochen: Mining wurde über AxeOS pausiert",
+                          stamp, automatic=True, details={"reason": "miningPaused=true"})
+                update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="warning",
+                                summary="Auto-Recovery durch bewusste Benutzerpause beendet",
+                                recovery="Mining wurde über AxeOS pausiert")
+                incident_id = incident_start = incident_before = incident_during = offline_since = None
+                auto_mode = False
+                auto_kind = None
+                auto_recovery_polls = 0
             if degraded_since is None and not auto_mode:
                 degradation_baseline = stable_hashrate_baseline(data, stamp)
-            degradation = hashrate_degradation(data, degradation_baseline)
-            observed_domain_stall = domain_stall_evidence(data)
+            degradation = None if pause_guard else hashrate_degradation(data, degradation_baseline)
+            observed_domain_stall = None if pause_guard else domain_stall_evidence(data)
             if observed_domain_stall and not auto_mode:
                 domain_stall_since = domain_stall_since or stamp
                 domain_stall_polls += 1
@@ -1162,7 +1299,7 @@ def poller():
             expected = degradation_baseline or expected_hashrate(data)
             recovery_threshold = expected * 0.80 if expected else 0
             healthy_hashrate = expected > 0 and hashrate >= recovery_threshold
-            normal_polls = normal_polls + 1 if healthy_hashrate and not fact else 0
+            normal_polls = normal_polls + 1 if healthy_hashrate and not fact and not pause_guard else 0
             if auto_locked and normal_polls >= RECOVERY_POLLS:
                 auto_locked = False
                 set_state_value("auto_restart_locked", "false")
@@ -1189,7 +1326,7 @@ def poller():
             rolling_limit_ready = automatic_restarts_since(stamp - 3600) < AUTO_RESTART_MAX_ATTEMPTS
             if (auto_restart_enabled() and trigger_evidence and trigger_since
                     and stamp - trigger_since >= trigger_after
-                    and not rolling_limit_ready and not auto_locked):
+                    and not rolling_limit_ready and not auto_locked and not pause_guard):
                 auto_locked = True
                 set_state_value("auto_restart_locked", "true")
                 add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
@@ -1198,7 +1335,7 @@ def poller():
             if (auto_restart_enabled() and not auto_locked and not auto_mode
                     and incident_id is None and trigger_evidence
                     and trigger_since and stamp - trigger_since >= trigger_after
-                    and cooldown_ready and rolling_limit_ready):
+                    and cooldown_ready and rolling_limit_ready and not pause_guard):
                 incident_before = old
                 incident_start = trigger_since
                 auto_restart_stamp = stamp
@@ -1233,7 +1370,15 @@ def poller():
                 details = {"reason": reason,
                            "attempt": auto_attempt, **facts}
                 try:
-                    restart_with_persisted_evidence(incident_id, data, details, stamp)
+                    _, _, request_status = restart_with_persisted_evidence(incident_id, data, details, stamp)
+                    if request_status == "cancelled_user_paused":
+                        discard_transient_auto_incident(incident_id)
+                        incident_id = incident_start = incident_before = incident_during = offline_since = None
+                        auto_mode = False
+                        auto_kind = None
+                        degraded_since = None
+                        domain_stall_since = None
+                        domain_stall_polls = 0
                 except Exception as restart_error:
                     add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
                               "Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
@@ -1293,7 +1438,13 @@ def poller():
                     try:
                         if automatic_restarts_since(stamp - 3600) >= AUTO_RESTART_MAX_ATTEMPTS:
                             raise RuntimeError("rolling_restart_limit")
-                        restart_with_persisted_evidence(incident_id, data, details, stamp)
+                        _, _, request_status = restart_with_persisted_evidence(incident_id, data, details, stamp)
+                        if request_status == "cancelled_user_paused":
+                            update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="warning",
+                                            summary="Zweiter Neustart durch bewusste Benutzerpause abgebrochen",
+                                            recovery="Mining wurde über AxeOS pausiert")
+                            auto_mode = False
+                            auto_kind = None
                     except Exception as restart_error:
                         add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
                                   "Zweiter Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
@@ -1344,7 +1495,9 @@ def poller():
                                     after_sample=safe_payload(data), severity="warning")
                     add_event("RECOVERED", "info", recovery)
                     incident_id = incident_start = incident_before = incident_during = offline_since = None
-            if state in {"OFFLINE", "RECOVERING"}:
+            if pause_now:
+                state = "USER PAUSED"
+            elif state in {"OFFLINE", "RECOVERING", "USER PAUSED"}:
                 state = "RECOVERING" if successes < RECOVERY_POLLS else "ONLINE"
             else:
                 state = "DEGRADED" if stopped_polls else "ONLINE"
@@ -1354,13 +1507,16 @@ def poller():
             state = "DEGRADED" if failures < OFFLINE_AFTER_POLLS else "OFFLINE"
             if failures == OFFLINE_AFTER_POLLS and not auto_mode:
                 offline_since = now() - POLL_SECONDS * (OFFLINE_AFTER_POLLS - 1)
-                if incident_id is None:
+                offline_context = offline_event_context()
+                planned_pause = offline_context["planned"]
+                if incident_id is None and not planned_pause:
                     incident_start = offline_since
                     incident_before = previous()
                     incident_id = create_incident(incident_start, "UNKNOWN", "GERÄT NICHT ERREICHBAR",
                                                   "API seit mehreren Polls nicht erreichbar", "critical",
                                                   facts={"controller_reachable": False}, before_override=incident_before)
-                add_event("OFFLINE", "critical", "Bitaxe seit mehreren Polls nicht erreichbar")
+                add_event("OFFLINE", offline_context["severity"], offline_context["message"],
+                          details={"after_user_pause": planned_pause})
             if incident_id and not auto_mode:
                 update_incident(incident_id, summary="API nicht erreichbar; Ursache noch nicht eindeutig",
                                 facts={"controller_reachable": False, "failed_polls": failures})

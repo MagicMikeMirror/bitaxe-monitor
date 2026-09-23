@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.5
+
+- Track deliberate AxeOS mining pauses as persistent USER_PAUSED / USER_RESUMED events rather than technical incidents.
+- Suppress stall detection and auto-recovery during pauses and the shared resume stabilization period, including a final pre-restart pause guard.
+- Keep pause telemetry unchanged while excluding planned pause time from technical hashrate averages.
+- Mark planned pause spans in historical charts and distinguish offline periods following a user pause.
+
 ## 1.3.4
 
 - Add profile-button tooltips with frequency, core voltage, fan mode and custom-OC status sourced from the live profile API.
