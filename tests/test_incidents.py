@@ -15,6 +15,10 @@ SPEC.loader.exec_module(APP)
 
 
 class IncidentClassificationTests(unittest.TestCase):
+    def test_historical_pause_endpoint_pattern_is_available(self):
+        self.assertEqual(APP.re.fullmatch(r"/api/incidents/(\d+)/confirm-user-pause",
+                                          "/api/incidents/15/confirm-user-pause").group(1), "15")
+
     def test_user_confirmed_historical_pause_preserves_incident_and_adds_timeline(self):
         with tempfile.TemporaryDirectory() as directory:
             original = APP.DB_PATH
