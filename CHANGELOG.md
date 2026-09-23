@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.7
+
+- Fix the historical user-pause confirmation endpoint startup dependency.
+
 ## 1.3.6
 
 - Allow a specifically user-confirmed legacy incident to be retained for audit but reclassified as a planned USER_PAUSED interval.
