@@ -518,6 +518,35 @@ def update_incident(incident_id, **changes):
         con.execute(f"UPDATE incidents SET {','.join(clauses)} WHERE id=?", values)
 
 
+def confirm_historical_user_pause(incident_id):
+    """Reclassify a user-confirmed legacy incident without altering telemetry."""
+    with db() as con:
+        row = con.execute("SELECT * FROM incidents WHERE id=?", (incident_id,)).fetchone()
+        if not row:
+            return None
+        start = int(row["started_at"])
+        end = int(row["ended_at"] or start)
+        facts = json.loads(row["facts"] or "{}")
+        facts.update({"planned": True, "user_confirmed": True,
+                      "reclassified_from": row["kind"]})
+        con.execute("""UPDATE incidents SET kind='USER_PAUSED', severity='info',
+            title='USER PAUSED', summary='Vom Benutzer bestätigte geplante Mining-Pause',
+            observed_cause='Benutzerpause', status='PLANNED', facts=?, updated_at=? WHERE id=?""",
+                    (json.dumps(facts, separators=(",", ":")), now(), incident_id))
+        for ts, kind, message in (
+            (start, "USER_PAUSED", "Historische Mining-Pause vom Benutzer bestätigt."),
+            (end, "USER_RESUMED", "Mining nach bestätigter Benutzerpause fortgesetzt."),
+        ):
+            exists = con.execute("SELECT 1 FROM events WHERE kind=? AND ts=?", (kind, ts)).fetchone()
+            if not exists:
+                con.execute("""INSERT INTO events(ts,kind,severity,message,incident_id,automatic,details)
+                    VALUES(?,?,?,?,?,0,?)""", (ts, kind, "info", message, incident_id,
+                    json.dumps({"planned": True, "user_confirmed": True,
+                                "historical_reclassification": True}, separators=(",", ":"))))
+        return {"id": incident_id, "started_at": start, "ended_at": end,
+                "kind": "USER_PAUSED", "status": "PLANNED"}
+
+
 def persisted_incident_forensics(incident_id):
     with db() as con:
         row = con.execute("SELECT facts FROM incidents WHERE id=?", (incident_id,)).fetchone()
@@ -1617,7 +1646,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json([dict(r) for r in rows])
         if p.path == "/api/incidents":
             with db() as con:
-                rows = con.execute("SELECT * FROM incidents ORDER BY started_at DESC LIMIT 100").fetchall()
+                rows = con.execute("""SELECT * FROM incidents WHERE kind <> 'USER_PAUSED'
+                    ORDER BY started_at DESC LIMIT 100""").fetchall()
             result = []
             for row in rows:
                 item = dict(row)
@@ -1682,13 +1712,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path not in {"/api/settings/auto-restart", "/api/settings/mining-profile", "/api/layouts"}:
+        pause_match = re.fullmatch(r"/api/incidents/(\d+)/confirm-user-pause", path)
+        if path not in {"/api/settings/auto-restart", "/api/settings/mining-profile", "/api/layouts"} and not pause_match:
             return self.send_error(404)
         try:
             length = min(65536, int(self.headers.get("Content-Length", "0")))
             payload = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self.send_json({"error": "invalid JSON"}, 400)
+        if pause_match:
+            if payload.get("confirmed") is not True:
+                return self.send_json({"error": "Historische Benutzerpause muss ausdrücklich bestätigt werden"}, 400)
+            result = confirm_historical_user_pause(int(pause_match.group(1)))
+            if not result:
+                return self.send_json({"error": "Vorfall nicht gefunden"}, 404)
+            return self.send_json(result, 200)
         if path == "/api/settings/mining-profile":
             key = str(payload.get("profile") or "").lower()
             profile = MINING_PROFILES.get(key)

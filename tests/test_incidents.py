@@ -15,6 +15,31 @@ SPEC.loader.exec_module(APP)
 
 
 class IncidentClassificationTests(unittest.TestCase):
+    def test_user_confirmed_historical_pause_preserves_incident_and_adds_timeline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "metrics.sqlite3")
+            try:
+                APP.init_db()
+                incident_id = APP.create_incident(1000, "UNKNOWN", "UNKNOWN", "Ursache nicht eindeutig")
+                APP.update_incident(incident_id, ended_at=1050, status="RESOLVED")
+                result = APP.confirm_historical_user_pause(incident_id)
+                with APP.db() as con:
+                    incident = con.execute("SELECT kind,status,severity,facts FROM incidents WHERE id=?",
+                                           (incident_id,)).fetchone()
+                    events = con.execute("SELECT ts,kind FROM events ORDER BY ts,id").fetchall()
+                self.assertEqual(result["kind"], "USER_PAUSED")
+                self.assertEqual((incident["kind"], incident["status"], incident["severity"]),
+                                 ("USER_PAUSED", "PLANNED", "info"))
+                self.assertTrue(json.loads(incident["facts"])["user_confirmed"])
+                self.assertEqual([(row["ts"], row["kind"]) for row in events],
+                                 [(1000, "USER_PAUSED"), (1050, "USER_RESUMED")])
+                self.assertEqual(APP.confirm_historical_user_pause(incident_id)["status"], "PLANNED")
+                with APP.db() as con:
+                    self.assertEqual(con.execute("SELECT COUNT(*) FROM events").fetchone()[0], 2)
+            finally:
+                APP.DB_PATH = original
+
     def test_efficiency_j_th_and_zero_hashrate(self):
         self.assertAlmostEqual(APP.mining_efficiency(23.0, 1210), 19.0, places=1)
         self.assertIsNone(APP.mining_efficiency(23.0, 0))
