@@ -2,9 +2,10 @@
 const selectedGeneration = new URLSearchParams(location.search).get('generation');
 const originalFetch = window.fetch.bind(window);
 window.fetch = (url, options) => {
-  if (typeof url === 'string' && url.startsWith('/api/') && selectedGeneration) {
+  const scope = selectedGeneration || generationState?.active;
+  if (typeof url === 'string' && url.startsWith('/api/') && scope) {
     const target = new URL(url, location.origin);
-    target.searchParams.set('generation', selectedGeneration);
+    target.searchParams.set('generation', scope);
     url = target.pathname + target.search;
   }
   return originalFetch(url, options);
