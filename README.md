@@ -1,5 +1,67 @@
 # Bitaxe Monitor
 
+## Device generations (1.4.0)
+
+The existing database stays assigned to **Gamma 1 – existing history** on upgrade.
+No replacement device is created, and no history is reset. Until an operator
+confirms the identity of a reachable device, polling cannot append samples to the
+old history or trigger automatic recovery. This is intentional when the old miner
+has already been returned and the replacement has not arrived.
+
+Use **Gerätewechsel vorbereiten** after the replacement is connected. The dialog
+offers a new history with the old one archived, or an explicit assignment to the
+old device. A fresh API read must provide a valid MAC; IP/hostname are never used
+as identity. The normalized MAC is stored only as a keyed HMAC in a local catalog.
+The raw MAC is not stored or exposed. Archive selection is read-only.
+
+Each generation owns a separate SQLite database. This deliberately isolates all
+existing queries, incidents, pauses, cooldowns and recovery state. The catalog
+`generations.sqlite3` selects the active database; the original `bitaxe.sqlite3`
+also retains shared dashboard layouts. New generations start with auto-restart
+disabled. Boot sessions and counter epochs distinguish restarts, ASIC counter
+resets, pauses and collection gaps within a generation. The catalog change uses
+a durable operation record; an interrupted switch is finished before polling.
+
+Before migration or switching, SQLite's backup API creates a consistent snapshot
+including committed WAL data, verifies integrity and table counts, and records a
+SHA-256 checksum. Switch backups also include the catalog and identity key.
+Keep the entire data directory, including `.device-identity.key`, in private
+backups; never commit or publish it. A missing key fails closed. Backups and
+archives are retained; no automatic deletion or destructive reset is provided.
+
+For recovery, stop the monitor first. Restore a coherent data-directory backup,
+including the catalog, referenced generation files and identity key. A switch
+backup's `telemetry.sqlite3` is a snapshot of the former active database: restore
+it under the filename referenced by the backed-up catalog, alongside all other
+referenced archive files. Never mix a catalog from one backup with another key.
+Migration-only backups can restore the pre-upgrade original database with the
+previous application image. Test restoration on an isolated copy first.
+
+The dashboard now includes four domain traces, ASIC-error windows (1/5/15 min),
+reset-aware ErrorCount deltas, windowed reject rates and efficiency, a separate
+input-voltage axis, heap diagnostics, configuration comparisons and a filtered
+incident/event timeline. Bitcoin's price chart and block value remain expanded.
+The market price refresh also works while the miner is absent. Pool/worker
+statistics are external history and do not reset with a local generation.
+
+Input current derived as power/input voltage is an estimate. With TPS546,
+the API current is regulator output current and power includes a board offset.
+ASIC error percentage is distinct from pool reject percentage. Negative sensor
+sentinels and invalid domain positions remain unknown rather than becoming zero.
+No ErrorCount delta is inferred across a reset, pause, ambiguous wrap or gap.
+
+`/api/system/asic` is read on hardware/firmware change; heap and additional sensor
+fields come from the existing info poll. Optional raw logs, WebSockets and
+scoreboard import remain disabled: they are not required for these diagnostics.
+The diagnostic plots are a 15-minute flight-recorder view. Persistent 1h/24h/7d
+production charts remain available. `/healthz` reports monitor/database readiness;
+miner availability is reported separately, so an absent replacement does not mark
+the healthy monitor container as broken.
+
+For a source build, run `docker compose build` before recreating the service.
+Locally built images do not imply that a corresponding public registry release
+has been published.
+
 A lightweight, privacy-first dashboard for Bitaxe and AxeOS miners. It polls the
 local AxeOS API, stores long-term telemetry in SQLite and detects operational
 events without Grafana, InfluxDB or additional containers.
@@ -95,8 +157,8 @@ Health endpoint: `http://localhost:8787/healthz`
 | `DOMAIN_STALL_POLLS` | `3` | Consecutive polls with at least two stalled ASIC domains before confirming the fault |
 | `DOMAIN_STALL_AFTER_SECONDS` | `60` | Persistent domain-stall duration before guarded restart |
 
-The hashrate card shows the live AxeOS value plus 10-minute and 1-hour AxeOS
-averages. Its 24-hour and 7-day values are calculated from the persistent
+The hashrate card shows the live AxeOS value plus its 10-minute average.
+Its 1-hour, 24-hour and 7-day values are calculated from the persistent
 SQLite history as time-weighted production averages. Confirmed downtime counts
 as zero; isolated missed polls do not become artificial outages. Until a full
 window is available, the dashboard labels the actual data coverage.
@@ -161,9 +223,11 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, change the image tag to `1.3.7`, and
-recreate the container. Startup only adds new SQLite tables; existing samples and
-events are not rewritten or deleted.
+Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.4.0` from source or
+use its published image when available, and recreate the container. The sample
+table gains a separate row ID so duplicate timestamps cannot overwrite telemetry.
+Existing sample timestamps/payloads, incidents and layouts are preserved. Startup
+does not bind a new device or create its history.
 
 ## Supported AxeOS versions
 

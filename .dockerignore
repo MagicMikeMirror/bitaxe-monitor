@@ -3,3 +3,9 @@ __pycache__/
 test-data/
 .git/
 .github/
+data/
+backups/
+.env
+.device-identity.key
+*.sqlite3*
+*.partial
