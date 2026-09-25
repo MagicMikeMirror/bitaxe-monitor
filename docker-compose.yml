@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.4.0
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.4.1
     build: .
     container_name: bitaxe-monitor
     restart: unless-stopped

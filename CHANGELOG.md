@@ -157,3 +157,7 @@
 - Record configuration changes; distinguish regulator faults from external power interruptions and observed restarts from recovery requests.
 - Keep Bitcoin price and block value expanded; refresh market data without a connected miner.
 - Preserve existing raw samples and layouts. No destructive reset or automatic retention deletion.
+
+## 1.4.1
+
+- Use a pure black background and neutral glass cards, controls and dialogs. Styling only; behavior and stored data unchanged.
