@@ -1116,7 +1116,7 @@ def market_poller():
             safe_miner = {
                 "bestDifficulty": accounting.get("bestSubmissionDifficulty") or client.get("bestDifficulty"),
                 "workersCount": client.get("workersCount"),
-                "hashRate": sum((w.get("hashRate") or 0) for w in workers),
+                "hashRate": sum((w.get("hashRate") or 0) for w in workers) if workers else None,
                 "soloWork": accounting.get("workSinceLastBlock"),
                 "lastSeen": accounting.get("latestShareAt") or (workers[0].get("lastSeen") if workers else None),
                 "workers": workers,
@@ -1991,8 +1991,10 @@ class Handler(BaseHTTPRequestHandler):
                 payload["miner"]["workers"] = [dict(w) for w in market_cache["miner"].get("workers", [])]
                 payload["network"] = dict(market_cache["network"])
             with db() as con:
-                latest = con.execute("SELECT payload FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
-            axeos = json.loads(latest["payload"]) if latest else {}
+                latest = con.execute("SELECT ts,payload FROM samples ORDER BY ts DESC LIMIT 1").fetchone()
+            fresh = latest and now() - latest['ts'] < POLL_SECONDS * 3
+            axeos = json.loads(latest["payload"]) if fresh else {}
+            payload['miner_data_age_seconds'] = now() - latest['ts'] if latest else None
             height = axeos.get("blockHeight") or payload["network"].get("blocks")
             payload["block_value"] = coinbase_block_value(axeos, height, payload["btc_eur"])
             return self.send_json(payload)
