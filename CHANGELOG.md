@@ -161,3 +161,7 @@
 ## 1.4.1
 
 - Use a pure black background and neutral glass cards, controls and dialogs. Styling only; behavior and stored data unchanged.
+
+## 1.4.2
+
+- Rename the dashboard heading to BitAxe Monitor. No functional changes.
