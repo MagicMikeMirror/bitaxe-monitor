@@ -218,7 +218,7 @@ class IncidentClassificationTests(unittest.TestCase):
             original = APP.DB_PATH
             APP.DB_PATH = str(pathlib.Path(directory) / "legacy.sqlite3")
             try:
-                with sqlite3.connect(APP.DB_PATH) as con:
+                with APP.connection(APP.DB_PATH) as con:
                     con.execute("CREATE TABLE events(id INTEGER PRIMARY KEY,ts INTEGER,kind TEXT,severity TEXT,message TEXT)")
                     con.execute("INSERT INTO events VALUES(1,100,'START','info','old event')")
                 APP.init_db()
@@ -336,7 +336,7 @@ class IncidentClassificationTests(unittest.TestCase):
         self.assertIn("Benutzerdefinierte OC-Werte", APP.HTML)
         self.assertIn("b.title=tip", APP.HTML)
         self.assertIn("setAttribute('aria-label',tip)", APP.HTML)
-        profile_handler = inspect.getsource(APP.Handler.do_POST)
+        profile_handler = inspect.getsource(APP.Handler.write_request)
         profile_section = profile_handler.split('if path == "/api/settings/mining-profile":', 1)[1]
         profile_section = profile_section.split('if path == "/api/layouts":', 1)[0]
         self.assertNotIn("request_axeos_restart", profile_section)
@@ -448,7 +448,7 @@ class IncidentClassificationTests(unittest.TestCase):
                 APP.save({"hashRate": 1100, "power": 20, "voltage": 5090,
                           "uptimeSeconds": 20, "resetReason": "Software reset via esp_restart"}, base + 60)
                 APP.backfill_historical_incidents()
-                with sqlite3.connect(APP.DB_PATH) as con:
+                with APP.connection(APP.DB_PATH) as con:
                     row = con.execute("SELECT kind,before_sample,pre_stats,ended_at,after_sample FROM incidents").fetchone()
                 self.assertEqual(row[0], "MINING_STALL")
                 self.assertIn('"hashRate":1110', row[1])

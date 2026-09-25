@@ -7,6 +7,12 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
+from device_history import Catalog, backup, connection
+from telemetry import number, configuration, continuous, counter_delta, domains, summarize
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse, urlunparse
@@ -47,6 +53,13 @@ market_lock = threading.Lock()
 miner_address = None
 hashrate_cache = {"updated": 0, "data": {}}
 hashrate_lock = threading.Lock()
+generation_lock = threading.RLock()
+database_context = ContextVar('database_context', default=None)
+catalog = None
+
+
+class IdentityPending(RuntimeError):
+    pass
 
 ALLOWED = (
     "power", "voltage", "current", "temp", "vrTemp", "coreVoltageActual",
@@ -63,14 +76,17 @@ ALLOWED = (
     "overclockEnabled", "temptarget", "fanspeed", "autofanspeed",
     "manualFanSpeed", "stratumProtocol", "fallbackStratumProtocol",
     "primaryPoolIndex", "secondaryPoolIndex", "workReceived", "sharesPending",
-    "blockSignals", "cpuUsage", "hostname", "hashrateMonitor",
-    "totalHashes", "totalLog2Work", "processTime"
+    "blockSignals", "cpuUsage", "hashrateMonitor",
+    "totalHashes", "totalLog2Work", "processTime", "temp2",
+    "freeHeap", "freeHeapInternal", "freeHeapSpiram", "minFreeHeap", "maxAllocHeap",
+    "responseShareBatch", "minFanSpeed", "maxPower", "nominalVoltage",
+    "isPSRAMAvailable", "runningPartition"
 )
 
 INCIDENT_KINDS = {
     "POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
     "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE",
-    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "UNKNOWN"
+    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "REGULATOR_FAULT", "WATCHDOG_RESET", "SYSTEM_RESET", "UNKNOWN"
 }
 
 LAYOUT_WIDGETS = (
@@ -100,33 +116,30 @@ HTML = r'''<!doctype html><html lang="de"><head><meta charset="utf-8">
 <div class="card wide"><div class="label">Bitcoin & Blockwert</div><div class="value" id="btcEur">—</div><div class="sub"><span id="priceUpdated">Aktueller BTC/EUR-Kurs</span> · <span class="pricechange" id="priceChange">24h —</span></div><div class="pricechart"><canvas id="btcPriceChart"></canvas></div><div class="facts"><div class="fact" title="Neu erzeugte Bitcoin pro Block gemäß aktuellem Halving-Zyklus."><span class="sub">Block-Subvention</span><b id="blockSubsidy">— BTC</b></div><div class="fact" title="Gebühren der Transaktionen im aktuellen Blocktemplate. Sie kommen zusätzlich zur Block-Subvention hinzu."><span class="sub">Transaktionsgebühren</span><b id="blockFees">—</b></div><div class="fact" title="Der aktuell deiner Mining-Adresse zugewiesene Coinbase-Wert inklusive Transaktionsgebühren."><span class="sub" id="blockValueLabel">Aktueller Blockwert</span><b id="blockBtc">— BTC</b><span class="sub" id="blockEur">—</span></div></div><div class="sub">Blockhöhe <span id="blockHeight">—</span></div></div>
 <div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Hashrate</div><div class="sub">GH/s</div></div><div class="tabs" data-chart="hashrate"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="chart"><canvas id="hashrate"></canvas></div></div>
-<div class="card wide"><div class="top"><div><div class="label">Leistung & Temperatur</div><div class="legend"><span><i class="key asic"></i>ASIC °C</span><span><i class="key vr"></i>VR °C</span><span><i class="key power"></i>Leistung W</span><span><i class="key voltage"></i>Input V</span></div></div><div class="tabs" data-chart="thermal"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="dual"><div class="mini"><canvas id="temperature"></canvas></div><div class="mini"><canvas id="powerchart"></canvas></div></div></div>
+<div class="card wide"><div class="top"><div><div class="label">Leistung & Temperatur</div><div class="legend"><span><i class="key asic"></i>ASIC °C</span><span><i class="key vr"></i>VR °C</span><span><i class="key power"></i>Leistung W</span><span><i class="key voltage"></i>Input V separat in Diagnose</span></div></div><div class="tabs" data-chart="thermal"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="dual"><div class="mini"><canvas id="temperature"></canvas></div><div class="mini"><canvas id="powerchart"></canvas></div></div></div>
 <div class="card wide"><div class="label">Incidents</div><div class="events" id="incidents"></div></div><div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div></section></main><dialog id="incidentDialog"><button class="closebtn" onclick="$('incidentDialog').close()">Schließen</button><div id="incidentDetail"></div></dialog>
 <script>
+let current, history, events, incidents;
 const $=id=>document.getElementById(id), fmt=(v,d=1)=>v==null?'—':Number(v).toFixed(d), dur=s=>{if(s==null)return'—';let d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=Math.floor(s%60);if(d)return d+'d '+h+'h '+m+'m';if(h)return h+'h '+m+'m';return m+'m '+x+'s'}, diff=v=>{if(v==null)return'—';if(v>=1e12)return(v/1e12).toFixed(2)+'T';if(v>=1e9)return(v/1e9).toFixed(2)+'G';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1e3)return(v/1e3).toFixed(2)+'K';return String(v)};
 new MutationObserver(()=>{$('dot').classList.toggle('pause',$('state').textContent==='USER PAUSED')}).observe($('state'),{childList:true});
 const REFRESH_MS=10000;let lastRefreshAt=0,nextRefreshAt=0;function markRefresh(){lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+REFRESH_MS;refreshClock()}function refreshClock(){if(!lastRefreshAt){$('seen').textContent='Refresh —';return}let next=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000)),stamp=new Date(lastRefreshAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});$('seen').textContent='Refresh '+stamp+' · nächster in '+next+'s'}
 const coverage=(pct,seconds)=>pct==null?'':fmt(pct,0)+'%';
-async function current(){let r=await fetch('/api/current'),x=await r.json(),d=x.data||{},h=x.hashrate_history||{},v=x.voltage_24h||{},st=x.state||(x.online?'ONLINE':'OFFLINE');$('dot').className='dot '+(st==='ONLINE'?'ok':'');$('state').textContent=st;$('health').textContent='STATUS: '+st;$('healthText').textContent=x.summary||'—';$('seen').textContent=x.age_seconds==null?'':'vor '+Math.round(x.age_seconds)+'s';$('ver').textContent=(d.version||'AxeOS')+' · Board '+(d.boardVersion||'—');$('hash').textContent=fmt(d.hashRate/1000,2)+' TH/s';$('hash10m').textContent=fmt(d.hashRate_10m/1000,2);$('hash1h').textContent=fmt(h.avg_1h/1000,2);$('hash24h').textContent=fmt(h.avg_24h/1000,2);$('hash7d').textContent=fmt(h.avg_7d/1000,2);$('cover1h').textContent=coverage(h.coverage_pct_1h,h.coverage_1h);$('cover24h').textContent=coverage(h.coverage_pct_24h,h.coverage_24h);$('cover7d').textContent=coverage(h.coverage_pct_7d,h.coverage_7d);$('power').textContent=fmt(d.power)+' W';$('efficiency').textContent=d.efficiencyJTh==null?'— J/TH':fmt(d.efficiencyJTh,1)+' J/TH';$('voltage').textContent=fmt(d.voltage/1000,2)+' V · '+fmt(d.calculatedCurrent,2)+' A berechnet';$('voltageStats').textContent=v.min==null?'24h —':'24h Min '+fmt(v.min/1000,2)+' · Ø '+fmt(v.avg/1000,2)+' · Max '+fmt(v.max/1000,2)+' V';$('temp').textContent=fmt(d.temp)+' °C';$('vr').textContent='VR '+fmt(d.vrTemp)+' °C · '+fmt(d.fanrpm,0)+' RPM';$('shares').textContent=(d.sharesAccepted??'—')+' / '+(d.sharesRejected??'—');$('best').textContent='Best '+diff(d.bestDiff)+' · Reject '+fmt(d.rejectRate,2)+'%';$('pool').textContent=d.isUsingFallbackStratum?'FALLBACK':'PRIMÄR';$('errors').textContent='Fehler '+fmt(d.errorPercentage,2)+'% · '+fmt(d.responseTime,0)+' ms';$('uptime').textContent=dur(d.uptimeSeconds);$('wifi').textContent=(d.wifiStatus||'—')+' · '+(d.wifiRSSI??'—')+' dBm';$('healthDetails').innerHTML=[['Mining',d.miningPaused?'pausiert':'aktiv'],['Power Fault',d.power_fault||'nein'],['Reset',d.resetReason||'—'],['Frequenz',fmt(d.actualFrequency,0)+' MHz'],['Erwartete Hashrate',fmt(d.expectedHashrate/1000,3)+' TH/s'],['Core',fmt(d.coreVoltageActual,0)+' mV']].map(v=>'<span>'+v[0]+': <b>'+v[1]+'</b></span>').join('')}
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
 async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
 const chartState={};function axisLabel(ts,range){let d=new Date(ts*1000);return range==='7d'?d.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'}):d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
 function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).filter(m=>m.planned&&m.ended_at).forEach(m=>{ctx.fillStyle='#57a6ff22';ctx.fillRect(px(Math.max(opt.start,m.ts)),top,Math.max(2,px(Math.min(opt.end,m.ended_at))-px(Math.max(opt.start,m.ts))),h-top-bottom)});(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.planned?'#57a6ff':(m.automatic?'#ffc857':'#ff5964');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
-async function history(range='1h'){let r=await fetch('/api/history?range='+range),x=await r.json(),s=x.samples||[],pts=k=>s.map(v=>({ts:v.ts,v:v[k],gap:!!v.gap})),o={markers:x.markers||[],start:x.start,end:x.end,range};draw('hashrate',[{name:'Hashrate',unit:'GH/s',points:pts('hashrate'),color:'#40e0a0'}],{...o,decimals:0});draw('temperature',[{name:'ASIC',unit:'°C',points:pts('temp'),color:'#ff5964',width:2.5},{name:'VR',unit:'°C',points:pts('vr_temp'),color:'#ffc857',width:2.5,dash:[7,5]}],{...o,min:20,max:85,unit:'°',decimals:0});draw('powerchart',[{name:'Leistung',unit:'W',points:pts('power'),color:'#57a6ff'},{name:'Input',unit:'V',points:pts('voltage'),color:'#40e0a0'}],{...o,min:0,max:40,decimals:1})}
-async function events(){let r=await fetch('/api/events'),x=await r.json();$('events').innerHTML=x.length?x.map(e=>'<div class="event"><span>'+new Date(e.ts*1000).toLocaleString()+'</span><b class="sev-'+e.severity+'">'+e.kind+'</b><span>'+e.message+'</span></div>').join(''):'<div class="sub" style="padding-top:12px">Noch keine Ereignisse</div>'}
 async function incidentDetail(id){
  let r=await fetch('/api/incidents/'+id),i=await r.json(),f=i.facts||{},fx=i.forensics||{},d=(i.diagnostics||[]).at(-1),o=d?.observed||i.before_sample||{},asic=o.hashrateMonitor?.asics?.[0]||{},domains=asic.domains||[],err=asic.errorCount??fx.error_count,delta=fx.error_count_delta,s=i.samples||[],w=i.window||{start:i.started_at-300,end:(i.ended_at||Date.now()/1000)+300};
  let showV=v=>v==null?'—':fmt(v/1000,2)+' V',asicParts=[];if(o.actualFrequency!=null)asicParts.push(fmt(o.actualFrequency,0)+' MHz');if(o.coreVoltage!=null)asicParts.push(fmt(o.coreVoltage,0)+' mV konfiguriert');if(o.coreVoltageActual!=null)asicParts.push(showV(o.coreVoltageActual)+' gemessen');
  let boxes=[['Beginn',new Date(i.started_at*1000).toLocaleString('de-DE')],['Dauer',dur((i.ended_at||Date.now()/1000)-i.started_at)],['Vor Neustart',o.hashRate==null?null:fmt(o.hashRate/1000,2)+' TH/s'+(o.power==null?'':' · '+fmt(o.power,1)+' W')+(o.voltage==null?'':' · '+showV(o.voltage))],['Temperatur',o.temp==null?null:'ASIC '+fmt(o.temp,1)+' °C'+(o.vrTemp==null?'':' · VR '+fmt(o.vrTemp,1)+' °C')],['Domains (AxeOS Raw)',domains.length?domains.map(v=>fmt(v,2)).join(' / ')+' GH/s':null],['ASIC',asicParts.length?asicParts.join(' · '):null],['Error Count',err==null?null:Number(err).toLocaleString('de-DE')+(delta==null?'':' · Δ +'+Number(delta).toLocaleString('de-DE'))],['Input Voltage',fx.voltage_incident==null?null:'Incident '+showV(fx.voltage_incident)+' · 60s Min '+showV(fx.voltage_min_60s)+' · 5m Min '+showV(fx.voltage_min_5m)],['Diagnosequelle',d?.source_status||null],['Recovery',i.recovery||null]].filter(v=>v[1]!=null);
- $('incidentDetail').innerHTML='<h2>'+i.kind+'</h2><p>'+i.summary+'</p><div class="detailgrid">'+boxes.map(v=>'<div class="detailbox"><span class="sub">'+v[0]+'</span><br><b>'+v[1]+'</b></div>').join('')+'</div><div class="incidentcharts"><div class="incidentchart"><div class="label">Hashrate & Domains</div><canvas id="incidentHash"></canvas></div><div class="incidentchart"><div class="label">Input Voltage</div><canvas id="incidentVoltage"></canvas></div><div class="incidentchart"><div class="label">Power & Temperaturen</div><canvas id="incidentThermal"></canvas></div><div class="incidentchart"><div class="label">Error Count</div><canvas id="incidentErrors"></canvas></div></div><h3>Einordnung</h3><p>Messwerte sind beobachtet. Domain-Werte und Error Count werden unverändert aus AxeOS übernommen. Der Error Count enthält keine Information über die konkrete Fehlerart; ein Counter-Reset wird nicht als negatives Delta dargestellt.</p>';
+ $('incidentDetail').innerHTML='<h2>'+escapeText(i.kind)+'</h2><p>'+escapeText(i.summary)+'</p><div class="detailgrid">'+boxes.map(v=>'<div class="detailbox"><span class="sub">'+v[0]+'</span><br><b>'+escapeText(v[1])+'</b></div>').join('')+'</div><div class="incidentcharts"><div class="incidentchart"><div class="label">Hashrate & Domains</div><canvas id="incidentHash"></canvas></div><div class="incidentchart"><div class="label">Input Voltage</div><canvas id="incidentVoltage"></canvas></div><div class="incidentchart"><div class="label">Power & Temperaturen</div><canvas id="incidentThermal"></canvas></div><div class="incidentchart"><div class="label">Error Count</div><canvas id="incidentErrors"></canvas></div></div><h3>Einordnung</h3><p>Messwerte sind beobachtet. Domain-Werte und Error Count werden unverändert aus AxeOS übernommen. Der Error Count enthält keine Information über die konkrete Fehlerart; ein Counter-Reset wird nicht als negatives Delta dargestellt.</p>';
  $('incidentDialog').showModal();
- let markers=[{ts:i.started_at,kind:i.kind,description:'Incident',automatic:false},...(i.events||[]).map(e=>({ts:e.ts,kind:e.kind,description:e.message,automatic:!!e.automatic}))],pts=fn=>s.map(v=>({ts:v.ts,v:fn(v)})),domain=n=>pts(v=>v.hashrateMonitor?.asics?.[0]?.domains?.[n]);
- draw('incidentHash',[{name:'Gesamt',unit:'GH/s',points:pts(v=>v.hashRate),color:'#40e0a0',width:2.5},...['#57a6ff','#ffc857','#ff5964','#b986ff'].map((c,n)=>({name:'Domain '+n,unit:'GH/s',points:domain(n),color:c}))],{start:w.start,end:w.end,range:'1h',markers,decimals:0});
+ let markers=[{ts:i.started_at,kind:i.kind,description:'Incident',automatic:false},...(i.events||[]).map(e=>({ts:e.ts,kind:e.kind,description:e.message,automatic:!!e.automatic}))],pts=fn=>s.map((v,n)=>({ts:v.ts,v:fn(v),gap:n>0&&(v.ts-s[n-1].ts>30||v.counterEpoch!==s[n-1].counterEpoch)})),domain=n=>pts(v=>v.hashrateMonitor?.asics?.[0]?.domains?.[n]);
+ draw('incidentHash',[{name:'Gesamt',unit:'GH/s',points:pts(v=>v.hashRate),color:'#40e0a0',width:2.5},...['#57a6ff','#ffc857','#ff5964','#b986ff'].map((c,n)=>({name:'Domain '+(n+1),unit:'GH/s',points:domain(n),color:c}))],{start:w.start,end:w.end,range:'1h',markers,decimals:0});
  draw('incidentVoltage',[{name:'Input',unit:'V',points:pts(v=>v.voltage==null?null:v.voltage/1000),color:'#40e0a0',width:2.5}],{start:w.start,end:w.end,range:'1h',markers,decimals:2,unit:'V'});
  draw('incidentThermal',[{name:'Leistung',unit:'W',points:pts(v=>v.power),color:'#57a6ff'},{name:'ASIC',unit:'°C',points:pts(v=>v.temp),color:'#ff5964'},{name:'VR',unit:'°C',points:pts(v=>v.vrTemp),color:'#ffc857',dash:[7,5]}],{start:w.start,end:w.end,range:'1h',markers,decimals:1});
  draw('incidentErrors',[{name:'Error Count',unit:'',points:pts(v=>v.hashrateMonitor?.asics?.[0]?.errorCount),color:'#b986ff',width:2.5}],{start:w.start,end:w.end,range:'1h',markers,decimals:0});
 }
-async function incidents(){let r=await fetch('/api/incidents'),x=await r.json();$('incidents').innerHTML=x.length?x.map(i=>{let end=i.ended_at||Math.floor(Date.now()/1000),b=i.before_sample||{},f=i.facts||{},fx=f.forensics||{},domains=f.domains,extra=domains?.length?' · Domains '+domains.map(v=>fmt(v,0)).join(' / '):'',errors=fx.error_count==null?'':' · Errors '+Number(fx.error_count).toLocaleString('de-DE')+(fx.error_count_delta==null?'':' (+'+Number(fx.error_count_delta).toLocaleString('de-DE')+')');return '<div class="event clickable" onclick="incidentDetail('+i.id+')"><span>'+new Date(i.started_at*1000).toLocaleString('de-DE')+'<br><small>'+dur(end-i.started_at)+'</small></span><b class="sev-'+i.severity+'">'+i.kind+'</b><span>'+i.summary+'<br><small>Vorher: '+fmt(b.voltage/1000,2)+' V · '+fmt(b.power,1)+' W · '+fmt(b.hashRate/1000,2)+' TH/s'+extra+errors+'</small></span></div>'}).join(''):'<div class="sub" style="padding-top:12px">Keine Vorfälle</div>'}
 async function autoRestartStatus(){let r=await fetch('/api/settings/auto-restart'),a=await r.json(),t=$('autoRestartToggle');t.checked=!!a.enabled;t.disabled=false;$('autoRestartState').textContent=a.enabled?'EIN':'AUS';$('autoRestartState').style.color=a.enabled?'var(--green)':'var(--muted)'}
 $('autoRestartToggle').onchange=async e=>{let t=e.currentTarget,w=t.checked;t.disabled=true;$('autoRestartState').textContent='…';try{let r=await fetch('/api/settings/auto-restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:w})});if(!r.ok)throw new Error();await autoRestartStatus();await current();await events()}catch(err){t.checked=!w;t.disabled=false;$('autoRestartState').textContent='FEHLER';$('autoRestartState').style.color='var(--red)'}};
 async function profileStatus(){let r=await fetch('/api/settings/mining-profile'),x=await r.json(),p=x.profiles||{},c=x.current||{};$('profileActive').textContent=x.active?p[x.active].label:'Benutzerdefiniert';$('profileCurrent').textContent=(c.frequency??'—')+' MHz · '+(c.coreVoltage??'—')+' mV · Lüfter '+(c.autofanspeed?'AUTO':(c.fanspeed??'—')+' %');document.querySelectorAll('#profileButtons button').forEach(b=>{let v=p[b.dataset.profile]||{},tip=(v.label||b.textContent)+': '+(v.frequency??'—')+' MHz · '+(v.coreVoltage??'—')+' mV · Lüfter '+(v.autofanspeed?'Auto':'fix '+(v.fanspeed??'—')+' %')+(v.custom?' · Benutzerdefinierte OC-Werte':'');b.classList.toggle('active',b.dataset.profile===x.active);b.title=tip;b.setAttribute('aria-label',tip)})}
@@ -138,18 +151,29 @@ function syncWidgetVisibility(card){card.hidden=card.classList.contains('is-hidd
 function defaultLayout(){return widgetMeta.map(([id])=>({id,collapsed:false,hidden:false}))}function leaveEdit(){let grid=document.querySelector('.grid');grid.classList.remove('layout-edit');[...grid.children].forEach(c=>{c.draggable=false;syncWidgetVisibility(c)});$('layoutEdit').textContent='Anpassen';$('layoutUpdate').hidden=true;$('layoutSave').hidden=true}function enterEdit(){let grid=document.querySelector('.grid');grid.classList.add('layout-edit');[...grid.children].filter(c=>c.dataset.widget).forEach(c=>{c.hidden=false;c.draggable=true});$('layoutEdit').textContent='Bearbeitung beenden';setLayoutDirty(layoutDirty)}
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');async function reloadLayouts(selectName=''){let r=await fetch('/api/layouts'),x=await r.json();savedLayouts=Array.isArray(x)?x:[];$('layoutSelect').innerHTML='<option value="">Standardlayout (geschützt)</option>'+savedLayouts.map(l=>'<option value="'+esc(l.name)+'">'+esc(l.name)+'</option>').join('');$('layoutSelect').value=selectName}
 async function setupLayouts(){let grid=document.querySelector('.grid'),cards=[...grid.children].filter(c=>c.classList.contains('card'));grid.id='dashboardGrid';let bar=document.createElement('div');bar.className='layoutbar';bar.innerHTML='<span class="label">Dashboard-Layout</span><select id="layoutSelect"><option value="">Standardlayout (geschützt)</option></select><button id="layoutEdit">Anpassen</button><button id="layoutUpdate" hidden>Änderungen speichern</button><button id="layoutSave" hidden>Als neues Layout speichern</button><button id="layoutDefault">Standard wiederherstellen</button><span class="layoutdirty" id="layoutDirty"></span>';grid.before(bar);cards.forEach((card,index)=>{let [id,title]=widgetMeta[index];card.dataset.widget=id;let body=document.createElement('div');body.className='widget-body';while(card.firstChild)body.appendChild(card.firstChild);let controls=document.createElement('div');controls.className='widgetbar';controls.innerHTML='<b>↕ '+title+'</b><button type="button" data-action="collapse">Minimieren</button><button type="button" data-action="hide">Ausblenden</button>';card.append(controls,body);controls.onclick=e=>{let action=e.target.dataset.action;if(!action)return;if(action==='collapse'){card.classList.toggle('is-collapsed');e.target.textContent=card.classList.contains('is-collapsed')?'Öffnen':'Minimieren'}else{card.classList.toggle('is-hidden');e.target.textContent=card.classList.contains('is-hidden')?'Einblenden':'Ausblenden'}setLayoutDirty()};card.ondragstart=()=>{if(!grid.classList.contains('layout-edit'))return false;draggedWidget=card;card.classList.add('dragging')};card.ondragend=()=>{card.classList.remove('dragging');[...grid.children].forEach(c=>c.classList.remove('dragover'));draggedWidget=null};card.ondragover=e=>{if(draggedWidget&&draggedWidget!==card){e.preventDefault();card.classList.add('dragover')}};card.ondragleave=()=>card.classList.remove('dragover');card.ondrop=e=>{e.preventDefault();card.classList.remove('dragover');if(draggedWidget&&draggedWidget!==card){let rect=card.getBoundingClientRect();grid.insertBefore(draggedWidget,e.clientY<rect.top+rect.height/2?card:card.nextSibling);setLayoutDirty()}}});await reloadLayouts(localStorage.getItem('bitaxeLayout')||'');let selected=$('layoutSelect').value,stored=savedLayouts.find(l=>l.name===selected);applyLayout(stored?.layout||defaultLayout());$('layoutSelect').onchange=e=>{if(layoutDirty&&!confirm('Ungespeicherte Änderungen verwerfen?')){e.target.value=localStorage.getItem('bitaxeLayout')||'';return}let item=savedLayouts.find(l=>l.name===e.target.value);applyLayout(item?.layout||defaultLayout());localStorage.setItem('bitaxeLayout',e.target.value);leaveEdit()};$('layoutEdit').onclick=()=>grid.classList.contains('layout-edit')?leaveEdit():enterEdit();$('layoutDefault').onclick=()=>{if(layoutDirty&&!confirm('Entwurf verwerfen und Standardlayout wiederherstellen?'))return;applyLayout(defaultLayout());$('layoutSelect').value='';localStorage.removeItem('bitaxeLayout');leaveEdit()};$('layoutUpdate').onclick=async()=>{let name=$('layoutSelect').value;if(!name)return;let r=await fetch('/api/layouts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,layout:layoutSnapshot(),overwrite:true})}),x=await r.json();if(!r.ok){alert(x.error||'Layout konnte nicht aktualisiert werden.');return}await reloadLayouts(x.name);localStorage.setItem('bitaxeLayout',x.name);setLayoutDirty(false);leaveEdit()};$('layoutSave').onclick=async()=>{let name=prompt('Name für das neue Layout:','');if(name==null)return;name=name.trim();if(!name){alert('Zum Speichern ist ein eigener Layoutname erforderlich.');return}let r=await fetch('/api/layouts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,layout:layoutSnapshot()})}),x=await r.json();if(!r.ok){alert(x.error||'Layout konnte nicht gespeichert werden.');return}await reloadLayouts(x.name);localStorage.setItem('bitaxeLayout',x.name);setLayoutDirty(false);leaveEdit()}}
-async function refreshDashboard(){nextRefreshAt=Date.now()+REFRESH_MS;try{await Promise.all([current(),autoRestartStatus(),profileStatus()]);markRefresh()}catch(e){refreshClock()}}document.querySelectorAll('.tabs[data-chart] button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs[data-chart] button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs[data-chart] button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});setupLayouts();refreshDashboard();market();history();events();incidents();setInterval(()=>{refreshDashboard();history(document.querySelector('.tabs[data-chart] button.active').dataset.r);events();incidents()},REFRESH_MS);setInterval(refreshClock,1000);setInterval(market,60000);
-</script></body></html>'''
+async function refreshDashboard(){nextRefreshAt=Date.now()+REFRESH_MS;try{await Promise.all([current(),autoRestartStatus(),profileStatus()]);markRefresh()}catch(e){refreshClock()}}document.querySelectorAll('.tabs[data-chart] button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs[data-chart] button').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tabs[data-chart] button[data-r="'+b.dataset.r+'"]').forEach(x=>x.classList.add('active'));history(b.dataset.r)});
+</script><script src="/dashboard.js"></script></body></html>'''
 
 
 def now():
     return int(time.time())
 
 
+def database_path():
+    return database_context.get() or (catalog.database() if catalog else DB_PATH)
+
+
+@contextmanager
+def use_database(path):
+    token = database_context.set(path)
+    try:
+        yield
+    finally:
+        database_context.reset(token)
+
+
 def db():
-    con = sqlite3.connect(DB_PATH, timeout=10)
-    con.row_factory = sqlite3.Row
-    return con
+    return connection(database_path())
 
 
 def migrate_schema(con):
@@ -180,10 +204,20 @@ def migrate_schema(con):
             name TEXT PRIMARY KEY COLLATE NOCASE, layout_json TEXT NOT NULL,
             created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)""")
         con.execute("INSERT INTO schema_migrations(version,applied_at) VALUES(3,?)", (now(),))
+    if 4 not in applied:
+        definition = con.execute("SELECT sql FROM sqlite_master WHERE name='samples'").fetchone()[0]
+        con.execute(definition.replace('samples', 'samples_v4', 1).replace(
+            'ts INTEGER PRIMARY KEY', 'id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL'))
+        columns = ','.join(row[1] for row in con.execute('PRAGMA table_info(samples)'))
+        con.execute(f'INSERT INTO samples_v4({columns}) SELECT {columns} FROM samples')
+        con.execute('DROP TABLE samples')
+        con.execute('ALTER TABLE samples_v4 RENAME TO samples')
+        con.execute('CREATE INDEX idx_samples_ts ON samples(ts)')
+        con.execute('INSERT INTO schema_migrations VALUES(4,?)', (now(),))
 
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(database_path()), exist_ok=True)
     with db() as con:
         con.executescript("""
         PRAGMA journal_mode=WAL;
@@ -221,6 +255,11 @@ def init_db():
         );
         """)
         migrate_schema(con)
+        con.execute('''CREATE TABLE IF NOT EXISTS boot_sessions(
+            id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, reason TEXT NOT NULL)''')
+        con.execute('''CREATE TABLE IF NOT EXISTS counter_epochs(
+            id TEXT PRIMARY KEY, boot_id TEXT NOT NULL REFERENCES boot_sessions(id),
+            started_at INTEGER NOT NULL, reason TEXT NOT NULL)''')
 
 
 def merge_intervals(intervals, start, end):
@@ -330,6 +369,7 @@ def confirmed_downtime(con, start, end):
 
 def historical_hashrate(at=None):
     end = int(at or now())
+    end = min(end, int(state_value('generation_ended_at', end)))
     result = {}
     with db() as con:
         first = con.execute("SELECT MIN(ts) FROM samples").fetchone()[0]
@@ -361,9 +401,11 @@ def historical_hashrate(at=None):
 def cached_historical_hashrate(at=None):
     stamp = int(at or now())
     with hashrate_lock:
-        if stamp - hashrate_cache["updated"] >= 60 or not hashrate_cache["data"]:
+        if (hashrate_cache.get('database') != database_path()
+                or stamp - hashrate_cache["updated"] >= 60 or not hashrate_cache["data"]):
             hashrate_cache["data"] = historical_hashrate(stamp)
             hashrate_cache["updated"] = stamp
+            hashrate_cache['database'] = database_path()
         return dict(hashrate_cache["data"])
 
 
@@ -388,7 +430,11 @@ def mining_efficiency(power_w, hashrate_gh):
 
 
 def safe_payload(data):
-    payload = dict(data or {})
+    data = data or {}
+    payload = clean(data)
+    for key in ('bootSession', 'counterEpoch', 'collectedAt', 'generation', 'apiResponseMs'):
+        if key in data:
+            payload[key] = data[key]
     payload["calculatedCurrent"] = calculated_current(payload)
     payload["efficiencyJTh"] = mining_efficiency(payload.get("power"), payload.get("hashRate"))
     return payload
@@ -400,15 +446,21 @@ def error_count(data):
     return value if isinstance(value, (int, float)) else None
 
 
-def stable_error_baseline(started_at):
+def stable_error_baseline(started_at, current=None):
     """Last healthy pre-incident counter; counter resets are handled by the caller."""
     with db() as con:
-        rows = con.execute("SELECT payload FROM samples WHERE ts<? ORDER BY ts DESC LIMIT 60",
-                           (started_at,)).fetchall()
+        rows = con.execute("SELECT ts,payload FROM samples WHERE ts>=? AND ts<? ORDER BY ts DESC LIMIT 60",
+                           (started_at - 300, started_at)).fetchall()
+    newer = None
     for row in rows:
         sample = json.loads(row["payload"])
+        if current and current.get('counterEpoch') and sample.get('counterEpoch') != current['counterEpoch']:
+            break
+        if newer and not continuous(sample, newer[1], newer[0] - row['ts'], POLL_SECONDS * 3):
+            break
+        newer = (row['ts'], sample)
         domains = (((sample.get("hashrateMonitor") or {}).get("asics") or [{}])[0].get("domains"))
-        if (sample.get("hashRate") or 0) > 0 and domains and all(
+        if (sample.get("hashRate") or 0) > 0 and not sample.get('miningPaused') and not observed_cause(sample) and domains and all(
                 isinstance(value, (int, float)) and value > 1 for value in domains):
             value = error_count(sample)
             if value is not None:
@@ -430,7 +482,7 @@ def incident_metrics(started_at, snapshot=None):
     observed_error = error_count(current)
     asics = ((current.get("hashrateMonitor") or {}).get("asics") or [])
     domains = asics[0].get("domains") if asics else None
-    baseline_error = stable_error_baseline(started_at)
+    baseline_error = stable_error_baseline(started_at, current)
     delta = (observed_error - baseline_error
              if observed_error is not None and baseline_error is not None
              and observed_error >= baseline_error else None)
@@ -472,7 +524,7 @@ def pre_crash_snapshot(ts, seconds=300):
     samples = [safe_payload(json.loads(r["payload"])) | {"ts": r["ts"]} for r in rows]
     fields = ("hashRate", "hashRate_1m", "hashRate_10m", "hashRate_1h", "power",
               "voltage", "calculatedCurrent", "temp", "vrTemp", "coreVoltageActual",
-              "actualFrequency", "fanrpm", "fanSpeed", "errorPercentage", "wifiRSSI",
+              "actualFrequency", "fanrpm", "fanspeed", "errorPercentage", "wifiRSSI",
               "responseTime")
     stats = {}
     for field in fields:
@@ -693,7 +745,9 @@ def domain_stall_evidence(data):
     domains = asics[0].get("domains") if asics else None
     if not isinstance(domains, list) or len(domains) < 4:
         return None
-    numeric = [float(value) if isinstance(value, (int, float)) else 0.0 for value in domains]
+    if any(number(value) is None for value in domains):
+        return None
+    numeric = [float(value) for value in domains]
     stalled = [index for index, value in enumerate(numeric) if value <= 1.0]
     safe = (
         len(stalled) >= 2
@@ -706,6 +760,10 @@ def domain_stall_evidence(data):
         and not data.get("power_fault")
         and not data.get("hardware_fault")
     )
+    try:
+        safe = safe and now() - int(state_value('configuration_changed_at', '0')) >= AUTO_RESTART_MIN_UPTIME
+    except sqlite3.Error:
+        pass
     return {"domains": numeric, "stalled_indexes": stalled,
             "active_count": len(numeric) - len(stalled)} if safe else None
 
@@ -718,7 +776,7 @@ def domains_recovered(data):
 
 
 def diagnostic_snapshot(data):
-    observed = safe_payload(clean(data or {}))
+    observed = safe_payload(data or {})
     raw_current = observed.get("current")
     derived = {"calculatedInputCurrent": calculated_current(observed)}
     field_paths = domain_register_paths(observed)
@@ -766,8 +824,20 @@ def freshest_restart_evidence(fallback):
     """Best-effort final read. Never discard the last valid sample when it fails."""
     try:
         raw = fetch_bitaxe_info()
-        return clean(raw), "fresh_api_read"
+        if catalog and not catalog.observe(raw, clean(raw)):
+            raise IdentityPending('Geräteidentität nicht bestätigt')
+        evidence = clean(raw)
+        if (fallback and configuration(fallback) == configuration(evidence)
+                and (evidence.get('uptimeSeconds') or 0) >= (fallback.get('uptimeSeconds') or 0)
+                and counter_delta(error_count(fallback), error_count(evidence)) is not None):
+            evidence.update({k: fallback[k] for k in ('bootSession', 'counterEpoch', 'generation') if k in fallback})
+        else:
+            evidence['counterEpoch'] = 'unverified'
+        evidence['collectedAt'] = now()
+        return evidence, "fresh_api_read"
     except Exception as exc:
+        if catalog:
+            raise IdentityPending('Keine frische bestätigte Geräteidentität') from exc
         return clean(fallback or {}), "fresh_api_read_failed:" + type(exc).__name__
 
 
@@ -793,14 +863,102 @@ def restart_with_persisted_evidence(incident_id, fallback, details, captured_at=
 
 def clean(raw):
     data = {k: raw.get(k) for k in ALLOWED}
+    text_fields = {'version', 'boardVersion', 'ASICModel', 'axeOSVersion', 'idfVersion',
+                   'resetReason', 'wifiStatus', 'power_fault', 'hardware_fault',
+                   'stratumProtocol', 'fallbackStratumProtocol', 'runningPartition'}
+    for key in text_fields:
+        data[key] = redact(data[key]) if isinstance(data[key], str) else None
+    for key in set(ALLOWED) - text_fields - {'sharesRejectedReasons', 'hashrateMonitor', 'blockSignals'}:
+        if not isinstance(data[key], bool):
+            data[key] = number(data[key])
+    for key in ('temp', 'temp2', 'vrTemp'):
+        if data[key] is not None and data[key] < 0:
+            data[key] = None
+    reasons = raw.get('sharesRejectedReasons')
+    data['sharesRejectedReasons'] = [
+        {'message': redact(r.get('message', '')), 'count': number(r.get('count'))}
+        for r in (reasons if isinstance(reasons, list) else [])[:20] if isinstance(r, dict)]
+    data['blockSignals'] = []  # not required for operational diagnostics
     monitor = raw.get("hashrateMonitor") or {}
+    if not isinstance(monitor, dict):
+        monitor = {}
     safe_asics = []
-    for asic in monitor.get("asics") or []:
-        domains = [value for value in (asic.get("domains") or []) if isinstance(value, (int, float))]
-        safe_asics.append({"total": asic.get("total"), "errorCount": asic.get("errorCount"),
+    for asic in (monitor.get("asics") or [])[:32]:
+        if not isinstance(asic, dict):
+            continue
+        domains = [number(value) for value in (asic.get("domains") or [])[:64]]
+        safe_asics.append({"total": number(asic.get("total")), "errorCount": number(asic.get("errorCount")),
                            "domains": domains})
     data["hashrateMonitor"] = {"asics": safe_asics}
     return data
+
+
+def redact(value):
+    text = str(value)[:240]
+    text = re.sub(r'(?i)(?:https?://|stratum\+\w+://)\S+|\b(?:bc1|tb1)[a-z0-9]{10,}|\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b', '[redacted]', text)
+    text = re.sub(r'(?i)\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b|\b(?:\d{1,3}\.){3}\d{1,3}\b|\S+@\S+', '[redacted]', text)
+    text = re.sub(r'(?i)(password|secret|token|ssid|stratumuser)\s*[:=]\s*\S+', r'\1=[redacted]', text)
+    return ''.join(c for c in text if ord(c) >= 32)
+
+
+def annotate_sample(data, stamp):
+    with db() as con:
+        row = con.execute('SELECT ts,payload FROM samples ORDER BY ts DESC,id DESC LIMIT 1').fetchone()
+        old = json.loads(row['payload']) if row else {}
+        interval = stamp - row['ts'] if row else 0
+        old_uptime, uptime = number(old.get('uptimeSeconds')), number(data.get('uptimeSeconds'))
+        boot_changed = (old_uptime is not None and uptime is not None and
+                        (uptime < old_uptime or abs(uptime - old_uptime - interval) > max(30, POLL_SECONDS * 3)))
+        boot = old.get('bootSession')
+        if not boot or boot_changed:
+            boot = str(uuid.uuid4())
+            con.execute('INSERT INTO boot_sessions VALUES(?,?,?)',
+                        (boot, stamp, 'uptime-discontinuity' if boot_changed else 'first-observation'))
+        epoch = old.get('counterEpoch')
+        old_count, new_count = error_count(old), error_count(data)
+        discontinuity = (not 0 < interval <= POLL_SECONDS * 3 or configuration(old) != configuration(data)
+                         or bool(old.get('miningPaused')) != bool(data.get('miningPaused'))
+                         or bool(old.get('overheat_mode')) != bool(data.get('overheat_mode'))
+                         or (old_count is not None and new_count is not None and new_count < old_count))
+        if not epoch or boot_changed or discontinuity:
+            epoch = str(uuid.uuid4())
+            con.execute('INSERT INTO counter_epochs VALUES(?,?,?,?)', (epoch, boot, stamp, 'counter-discontinuity'))
+        data.update({'bootSession': boot, 'counterEpoch': epoch, 'collectedAt': stamp,
+                     'generation': catalog.active() if catalog else 'local'})
+
+
+def telemetry_samples(start, end):
+    with db() as con:
+        rows = con.execute('SELECT ts,payload FROM samples WHERE ts BETWEEN ? AND ? ORDER BY ts,id', (start, end)).fetchall()
+    return [{'ts': r['ts'], **safe_payload(json.loads(r['payload']))} for r in rows]
+
+
+def diagnostic_history(at=None):
+    end = int(at or now())
+    end = min(end, int(state_value('generation_ended_at', end)))
+    samples = telemetry_samples(end - 900 - POLL_SECONDS * 3, end)
+    return {'asic': json.loads(state_value('asic_metadata', '{}')), 'poll_seconds': POLL_SECONDS,
+            'windows': {label: summarize(samples, end, seconds, POLL_SECONDS * 3, VOLTAGE_LOW_V * 1000)
+                        for label, seconds in (('1m', 60), ('5m', 300), ('15m', 900))},
+            'samples': samples, 'start': end - 900, 'end': end}
+
+
+def update_asic_metadata(data):
+    signature = json.dumps([data.get(k) for k in ('version', 'boardVersion', 'ASICModel')])
+    if state_value('asic_signature') == signature:
+        return
+    parsed = urlparse(API_URL)
+    try:
+        raw = get_json(urlunparse((parsed.scheme, parsed.netloc, '/api/system/asic', '', '', '')))
+        metadata = {key: number(raw.get(key)) for key in ('asicCount', 'defaultFrequency', 'defaultVoltage')}
+        metadata.update({key: redact(raw.get(key, '')) for key in ('ASICModel', 'deviceModel')})
+        for key in ('frequencyOptions', 'voltageOptions'):
+            metadata[key] = [number(v) for v in (raw.get(key) or [])[:100]]
+        set_state_value('asic_metadata', json.dumps(metadata))
+        set_state_value('asic_signature', signature)
+    except (OSError, ValueError, TypeError):
+        # Retry no more than once in five minutes when a firmware lacks the endpoint.
+        set_state_value('asic_retry_at', now() + 300)
 
 
 def mining_address(raw):
@@ -870,7 +1028,7 @@ def classify_incident(before, during, after=None, offline_seconds=0):
     before, during, after = before or {}, during or {}, after or {}
     fault = observed_cause(during) or observed_cause(after)
     if (during.get("power_fault") or after.get("power_fault")):
-        return "POWER_INTERRUPTION", fault
+        return "REGULATOR_FAULT", fault
     if during.get("overheat_mode") or after.get("overheat_mode"):
         return "THERMAL_EVENT", fault
     old_uptime, new_uptime = before.get("uptimeSeconds"), after.get("uptimeSeconds")
@@ -884,7 +1042,11 @@ def classify_incident(before, during, after=None, offline_seconds=0):
     if rebooted and any(word in reset for word in ("power-on", "power on", "brownout")):
         return "POWER_INTERRUPTION", "Uptime-Reset und neuer Power-on-Resetgrund"
     if rebooted:
-        return "SOFTWARE_RESTART", "Uptime-Reset zeitgleich mit Neustart"
+        if 'watchdog' in reset or 'panic' in reset or 'exception' in reset:
+            return "WATCHDOG_RESET", "Uptime-Reset mit Watchdog-/Panic-Resetgrund"
+        if 'esp_restart' in reset:
+            return "SOFTWARE_RESTART", "Uptime-Reset mit Software-Resetgrund"
+        return "SYSTEM_RESET", "Uptime-Reset; Auslöser nicht eindeutig"
     if offline_seconds:
         return "NETWORK_OR_API_OUTAGE", "API zeitweise nicht erreichbar; kein Uptime-Reset beobachtet"
     if during.get("isUsingFallbackStratum"):
@@ -933,16 +1095,21 @@ def market_poller():
         try:
             with market_lock:
                 address = miner_address
-            if not address:
-                time.sleep(2)
-                continue
-            network = get_json(PUBLIC_POOL_API_URL + "/network")
+            market_generation = catalog.active() if catalog else None
+            try:
+                network = get_json(PUBLIC_POOL_API_URL + "/network")
+            except (OSError, ValueError):
+                with market_lock:
+                    network = dict(market_cache.get('network') or {})
             price = get_json(BTC_PRICE_URL)
             try:
                 candles = get_json(BTC_HISTORY_URL)
             except Exception:
                 candles = []
-            client = get_json(PUBLIC_POOL_API_URL + "/client/" + quote(address, safe=""))
+            try:
+                client = get_json(PUBLIC_POOL_API_URL + "/client/" + quote(address, safe="")) if address else {}
+            except (OSError, ValueError):
+                client = {}
             workers = [{k: w.get(k) for k in ("name", "payoutMode", "bestDifficulty", "hashRate", "startTime", "lastSeen")}
                        for w in (client.get("workers") or [])]
             accounting = client.get("accounting") or {}
@@ -970,6 +1137,8 @@ def market_poller():
                     price_high = market_cache.get("price_high")
             subsidy = block_subsidy(safe_network["blocks"])
             with market_lock:
+                if catalog and market_generation != catalog.active():
+                    continue
                 market_cache = {"updated": now(), "btc_eur": btc_eur, "block_btc": subsidy,
                                 "price_history": price_history, "price_change_pct": price_change,
                                 "price_low": price_low, "price_high": price_high,
@@ -1001,7 +1170,7 @@ def stable_hashrate_baseline(data, at=None):
     try:
         with db() as con:
             rows = con.execute("SELECT hashrate FROM samples WHERE ts>=? AND ts<? AND hashrate>=? ORDER BY ts",
-                               (stamp - 3600, stamp, floor)).fetchall()
+                               (max(stamp - 3600, int(state_value('configuration_changed_at', '0'))), stamp, floor)).fetchall()
     except sqlite3.Error:
         rows = []
     recent = [float(row[0]) for row in rows if row[0] is not None]
@@ -1030,6 +1199,10 @@ def hashrate_degradation(data, baseline=None):
         and not data.get("power_fault")
         and not data.get("hardware_fault")
     )
+    try:
+        safe = safe and now() - int(state_value('configuration_changed_at', '0')) >= AUTO_RESTART_MIN_UPTIME
+    except sqlite3.Error:
+        pass
     return {"hashrate": rate, "expected": expected, "baseline": baseline,
             "threshold": threshold, "loss_pct": (baseline - rate) * 100 / baseline} if safe else None
 
@@ -1137,7 +1310,9 @@ def offline_event_context():
 
 
 def auto_restart_enabled():
-    return AUTO_RESTART_ENABLED or state_value("auto_restart_enabled", "false").lower() == "true"
+    if catalog and (not catalog.get()['fingerprint'] or database_path() != catalog.database()):
+        return False
+    return state_value('auto_restart_enabled', str(AUTO_RESTART_ENABLED).lower()).lower() == 'true'
 
 
 def validate_dashboard_layout(layout):
@@ -1189,6 +1364,25 @@ def detect(old, new, stamp=None):
     if not old:
         add_event("START", "info", "Monitoring gestartet", stamp)
         return
+    if configuration(old) != configuration(new):
+        set_state_value('configuration_changed_at', stamp)
+        add_event('CONFIGURATION_CHANGED', 'info', 'Frequenz, Core-Spannung oder Kühlung geändert', stamp,
+                  details={'before': configuration(old), 'after': configuration(new)})
+    ds = domains(new)
+    weak = sum(v <= 1 for v in ds if v is not None)
+    if ds and all(v is not None for v in ds) and weak and not new.get('miningPaused'):
+        since = int(state_value('domain_warning_since', '0'))
+        if not since:
+            set_state_value('domain_warning_since', stamp)
+        elif stamp - since >= DOMAIN_STALL_POLLS * POLL_SECONDS and state_value('domain_warning_sent') != 'true':
+            add_event('DOMAIN_WARNING', 'warning', f'{weak} von {len(ds)} Domains seit {stamp-since}s ohne messbare Hashrate', stamp)
+            set_state_value('domain_warning_sent', 'true')
+    else:
+        set_state_value('domain_warning_since', '0')
+        set_state_value('domain_warning_sent', 'false')
+    if ((new.get('fanspeed') or 0) > 20 and new.get('fanrpm') == 0
+            and (old.get('fanrpm') or 0) > 0 and (new.get('power') or 0) > IDLE_POWER_W):
+        add_event('FAN_WARNING', 'warning', 'Lüfter angefordert, aber keine Drehzahl gemeldet', stamp)
     checks = [
         ("POWER", (old.get("power") or 0) <= POWER_HIGH < (new.get("power") or 0), "warning", f"Leistung über {POWER_HIGH:g} W"),
         ("TEMPERATURE", (old.get("temp") or 0) <= TEMP_HIGH < (new.get("temp") or 0), "critical", f"Temperatur über {TEMP_HIGH:g} °C"),
@@ -1229,10 +1423,11 @@ def save(data, ts):
               data.get("wifiRSSI"), int(bool(data.get("isUsingFallbackStratum"))),
               data.get("blockFound"), json.dumps(data, separators=(",", ":")))
     with db() as con:
-        con.execute("INSERT OR REPLACE INTO samples VALUES(" + ",".join("?" * 27) + ")", values)
+        columns = ','.join(r[1] for r in con.execute('PRAGMA table_info(samples)') if r[1] != 'id')
+        con.execute(f"INSERT INTO samples({columns}) VALUES(" + ",".join("?" * 27) + ")", values)
 
 
-def poller():
+def poll_generation():
     global miner_address
     failures = successes = stopped_polls = 0
     state = "ONLINE"
@@ -1267,293 +1462,352 @@ def poller():
         auto_attempt = int(facts.get("attempt") or 1)
         auto_uptime_reset = bool(facts.get("uptime_reset"))
     while True:
-        started = time.monotonic()
-        try:
-            raw = fetch_bitaxe_info()
-            address = mining_address(raw)
-            if address:
-                with market_lock:
-                    miner_address = address
-            data = clean(raw)
-            old = previous()
-            stamp = now()
-            was_user_paused = user_pause_active()
-            previous_failures = failures
-            detect(old, data, stamp)
-            save(data, stamp)
-            failures = 0
-            successes += 1
-            pause_now = bool(data.get("miningPaused"))
-            pause_guard = pause_now or user_pause_grace_active(stamp)
-            if previous_failures >= OFFLINE_AFTER_POLLS and was_user_paused:
-                add_event("RECOVERED", "info", "Bitaxe nach Benutzerpause wieder erreichbar", stamp,
-                          details={"after_user_pause": True})
-            hashrate = data.get("hashRate") or 0
-            fact = observed_cause(data)
-            rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
-            stopped = not pause_guard and ((hashrate <= 10) or bool(fact))
-            if pause_guard:
-                stopped_polls = 0
-                degraded_since = None
-                degradation_baseline = None
-                degradation_values = []
-                domain_stall_since = None
-                domain_stall_polls = 0
-            if pause_now and auto_mode:
-                add_event("AUTO_RECOVERY_CANCELLED_USER_PAUSED", "info",
-                          "Weitere Auto-Recovery abgebrochen: Mining wurde über AxeOS pausiert",
-                          stamp, automatic=True, details={"reason": "miningPaused=true"})
-                update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="warning",
-                                summary="Auto-Recovery durch bewusste Benutzerpause beendet",
-                                recovery="Mining wurde über AxeOS pausiert")
-                incident_id = incident_start = incident_before = incident_during = offline_since = None
-                auto_mode = False
-                auto_kind = None
-                auto_recovery_polls = 0
-            if degraded_since is None and not auto_mode:
-                degradation_baseline = stable_hashrate_baseline(data, stamp)
-            degradation = None if pause_guard else hashrate_degradation(data, degradation_baseline)
-            observed_domain_stall = None if pause_guard else domain_stall_evidence(data)
-            if observed_domain_stall and not auto_mode:
-                domain_stall_since = domain_stall_since or stamp
-                domain_stall_polls += 1
-                if domain_stall_polls == DOMAIN_STALL_POLLS:
-                    add_event("ASIC_DOMAIN_STALL_DETECTED", "critical",
-                              f"ASIC-Domain-Stall erkannt: {len(observed_domain_stall['stalled_indexes'])} von "
-                              f"{len(observed_domain_stall['domains'])} Domains ohne Hashrate",
-                              details=observed_domain_stall)
-            elif not auto_mode:
-                domain_stall_since = None
-                domain_stall_polls = 0
-            confirmed_domain_stall = (observed_domain_stall if domain_stall_polls >= DOMAIN_STALL_POLLS else None)
-            expected = degradation_baseline or expected_hashrate(data)
-            recovery_threshold = expected * 0.80 if expected else 0
-            healthy_hashrate = expected > 0 and hashrate >= recovery_threshold
-            normal_polls = normal_polls + 1 if healthy_hashrate and not fact and not pause_guard else 0
-            if auto_locked and normal_polls >= RECOVERY_POLLS:
-                auto_locked = False
-                set_state_value("auto_restart_locked", "false")
-                add_event("AUTO_RESTART_REARMED", "info",
-                          "Automatischer Neustart nach stabiler Hashrate wieder freigegeben")
-            if degradation and not auto_mode:
-                if degraded_since is None:
-                    degraded_since = stamp
+        with generation_lock:
+            if catalog:
+                catalog.finish_operations()
+            started = time.monotonic()
+            if catalog and database_path() != catalog.database():
+                return
+            try:
+                request_started = time.monotonic()
+                raw = fetch_bitaxe_info()
+                if catalog and not catalog.observe(raw, clean(raw)):
+                    raise IdentityPending('Gerätezuordnung erforderlich')
+                address = mining_address(raw)
+                if address:
+                    with market_lock:
+                        miner_address = address
+                data = clean(raw)
+                old = previous()
+                stamp = now()
+                data['apiResponseMs'] = round((time.monotonic() - request_started) * 1000, 1)
+                annotate_sample(data, stamp)
+                if stamp >= int(state_value('asic_retry_at', '0')):
+                    update_asic_metadata(data)
+                if old and configuration(old) != configuration(data):
+                    degraded_since = domain_stall_since = None
+                    degradation_baseline = None
+                    domain_stall_polls = 0
+                    if auto_mode:
+                        update_incident(incident_id, ended_at=stamp, status='CANCELLED',
+                                        recovery='Konfiguration geändert; Recovery-Beobachtung beendet')
+                        incident_id = None
+                        auto_mode = False
+                was_user_paused = user_pause_active()
+                previous_failures = failures
+                detect(old, data, stamp)
+                save(data, stamp)
+                failures = 0
+                successes += 1
+                pause_now = bool(data.get("miningPaused"))
+                pause_guard = pause_now or user_pause_grace_active(stamp)
+                if previous_failures >= OFFLINE_AFTER_POLLS and was_user_paused:
+                    add_event("RECOVERED", "info", "Bitaxe nach Benutzerpause wieder erreichbar", stamp,
+                              details={"after_user_pause": True})
+                hashrate = data.get("hashRate") or 0
+                fact = observed_cause(data)
+                rebooted = bool(old and (data.get("uptimeSeconds") or 0) + 30 < (old.get("uptimeSeconds") or 0))
+                stopped = not pause_guard and ((hashrate <= 10) or bool(fact))
+                if pause_guard:
+                    stopped_polls = 0
+                    degraded_since = None
+                    degradation_baseline = None
                     degradation_values = []
-                    add_event("HASHRATE_DROP_DETECTED", "warning",
-                              f"Hashrate-Einbruch erkannt: {hashrate:.0f} GH/s bei Basis {expected:.0f} GH/s",
-                              details={"baseline_gh": expected, "threshold_gh": degradation["threshold"],
-                                       "observed_gh": hashrate, "loss_pct": degradation["loss_pct"]})
-                degradation_values.append(hashrate)
-            elif not auto_mode:
-                degraded_since = None
-                degradation_baseline = None
-                degradation_values = []
+                    domain_stall_since = None
+                    domain_stall_polls = 0
+                if pause_now and auto_mode:
+                    add_event("AUTO_RECOVERY_CANCELLED_USER_PAUSED", "info",
+                              "Weitere Auto-Recovery abgebrochen: Mining wurde über AxeOS pausiert",
+                              stamp, automatic=True, details={"reason": "miningPaused=true"})
+                    update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="warning",
+                                    summary="Auto-Recovery durch bewusste Benutzerpause beendet",
+                                    recovery="Mining wurde über AxeOS pausiert")
+                    incident_id = incident_start = incident_before = incident_during = offline_since = None
+                    auto_mode = False
+                    auto_kind = None
+                    auto_recovery_polls = 0
+                if degraded_since is None and not auto_mode:
+                    degradation_baseline = stable_hashrate_baseline(data, stamp)
+                degradation = None if pause_guard else hashrate_degradation(data, degradation_baseline)
+                observed_domain_stall = None if pause_guard else domain_stall_evidence(data)
+                if observed_domain_stall and not auto_mode:
+                    domain_stall_since = domain_stall_since or stamp
+                    domain_stall_polls += 1
+                    if domain_stall_polls == DOMAIN_STALL_POLLS:
+                        add_event("ASIC_DOMAIN_STALL_DETECTED", "critical",
+                                  f"ASIC-Domain-Stall erkannt: {len(observed_domain_stall['stalled_indexes'])} von "
+                                  f"{len(observed_domain_stall['domains'])} Domains ohne Hashrate",
+                                  details=observed_domain_stall)
+                elif not auto_mode:
+                    domain_stall_since = None
+                    domain_stall_polls = 0
+                confirmed_domain_stall = (observed_domain_stall if domain_stall_polls >= DOMAIN_STALL_POLLS else None)
+                expected = degradation_baseline or expected_hashrate(data)
+                recovery_threshold = expected * 0.80 if expected else 0
+                healthy_hashrate = expected > 0 and hashrate >= recovery_threshold
+                normal_polls = normal_polls + 1 if healthy_hashrate and not fact and not pause_guard else 0
+                if auto_locked and normal_polls >= RECOVERY_POLLS:
+                    auto_locked = False
+                    set_state_value("auto_restart_locked", "false")
+                    add_event("AUTO_RESTART_REARMED", "info",
+                              "Automatischer Neustart nach stabiler Hashrate wieder freigegeben")
+                if degradation and not auto_mode:
+                    if degraded_since is None:
+                        degraded_since = stamp
+                        degradation_values = []
+                        add_event("HASHRATE_DROP_DETECTED", "warning",
+                                  f"Hashrate-Einbruch erkannt: {hashrate:.0f} GH/s bei Basis {expected:.0f} GH/s",
+                                  details={"baseline_gh": expected, "threshold_gh": degradation["threshold"],
+                                           "observed_gh": hashrate, "loss_pct": degradation["loss_pct"]})
+                    degradation_values.append(hashrate)
+                elif not auto_mode:
+                    degraded_since = None
+                    degradation_baseline = None
+                    degradation_values = []
 
-            trigger_evidence = confirmed_domain_stall or degradation
-            trigger_since = domain_stall_since if confirmed_domain_stall else degraded_since
-            trigger_after = DOMAIN_STALL_AFTER_SECONDS if confirmed_domain_stall else AUTO_RESTART_AFTER_SECONDS
-            cooldown_ready = bool(confirmed_domain_stall) or stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
-            rolling_limit_ready = automatic_restarts_since(stamp - 3600) < AUTO_RESTART_MAX_ATTEMPTS
-            if (auto_restart_enabled() and trigger_evidence and trigger_since
-                    and stamp - trigger_since >= trigger_after
-                    and not rolling_limit_ready and not auto_locked and not pause_guard):
-                auto_locked = True
-                set_state_value("auto_restart_locked", "true")
-                add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
-                          "Automatischer Neustart unterdrückt: bereits zwei Versuche in 60 Minuten",
-                          details={"window_seconds": 3600, "max_attempts": AUTO_RESTART_MAX_ATTEMPTS})
-            if (auto_restart_enabled() and not auto_locked and not auto_mode
-                    and incident_id is None and trigger_evidence
-                    and trigger_since and stamp - trigger_since >= trigger_after
-                    and cooldown_ready and rolling_limit_ready and not pause_guard):
-                incident_before = old
-                incident_start = trigger_since
-                auto_restart_stamp = stamp
-                auto_attempt = 1
-                auto_uptime_reset = False
-                auto_kind = "ASIC_DOMAIN_STALL" if confirmed_domain_stall else "HASHRATE_DEGRADATION"
-                facts = {"auto_restart": True, "restart_requested_at": stamp, "attempt": auto_attempt,
-                         "trigger": auto_kind, "baseline_gh": expected, "observed_gh": hashrate,
-                         "duration_seconds": stamp - trigger_since,
-                         "domains": (confirmed_domain_stall or {}).get("domains"),
-                         "stalled_domain_indexes": (confirmed_domain_stall or {}).get("stalled_indexes")}
-                facts["forensics"] = incident_metrics(incident_start, data)
-                if degradation:
-                    facts.update({"loss_threshold_pct": AUTO_RESTART_LOSS * 100,
-                                  "threshold_gh": degradation["threshold"],
-                                  "lowest_gh": min(degradation_values or [hashrate]),
-                                  "average_gh": sum(degradation_values or [hashrate]) / len(degradation_values or [hashrate])})
-                summary = (f"Mindestens zwei ASIC-Domains seit {trigger_after} Sekunden ohne Hashrate; automatischer Neustart angefordert"
-                           if confirmed_domain_stall else
-                           f"Hashrate seit {AUTO_RESTART_AFTER_SECONDS // 60} Minuten unter {AUTO_RESTART_LOSS * 100:.0f} % Verlust; automatischer Neustart angefordert")
-                incident_id = create_incident(
-                    incident_start, auto_kind, auto_kind.replace("_", " "), summary,
-                    "warning", facts=facts, before_override=incident_before)
-                attach_incident_sample(incident_id, stamp, "restart", data)
-                set_state_value("last_auto_restart", stamp)
-                last_auto_restart = stamp
-                auto_mode = True
-                auto_recovery_polls = 0
-                reason = (f"ASIC-Domain-Stall: Domains {confirmed_domain_stall['stalled_indexes']} ohne Hashrate; AxeOS-Neustart angefordert"
-                          if confirmed_domain_stall else
-                          f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert")
-                details = {"reason": reason,
-                           "attempt": auto_attempt, **facts}
-                try:
-                    _, _, request_status = restart_with_persisted_evidence(incident_id, data, details, stamp)
-                    if request_status == "cancelled_user_paused":
-                        discard_transient_auto_incident(incident_id)
+                trigger_evidence = confirmed_domain_stall or degradation
+                trigger_since = domain_stall_since if confirmed_domain_stall else degraded_since
+                trigger_after = DOMAIN_STALL_AFTER_SECONDS if confirmed_domain_stall else AUTO_RESTART_AFTER_SECONDS
+                cooldown_ready = bool(confirmed_domain_stall) or stamp - last_auto_restart >= AUTO_RESTART_COOLDOWN
+                rolling_limit_ready = automatic_restarts_since(stamp - 3600) < AUTO_RESTART_MAX_ATTEMPTS
+                if (auto_restart_enabled() and trigger_evidence and trigger_since
+                        and stamp - trigger_since >= trigger_after
+                        and not rolling_limit_ready and not auto_locked and not pause_guard):
+                    auto_locked = True
+                    set_state_value("auto_restart_locked", "true")
+                    add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
+                              "Automatischer Neustart unterdrückt: bereits zwei Versuche in 60 Minuten",
+                              details={"window_seconds": 3600, "max_attempts": AUTO_RESTART_MAX_ATTEMPTS})
+                if (auto_restart_enabled() and not auto_locked and not auto_mode
+                        and incident_id is None and trigger_evidence
+                        and trigger_since and stamp - trigger_since >= trigger_after
+                        and cooldown_ready and rolling_limit_ready and not pause_guard):
+                    incident_before = old
+                    incident_start = trigger_since
+                    auto_restart_stamp = stamp
+                    auto_attempt = 1
+                    auto_uptime_reset = False
+                    auto_kind = "ASIC_DOMAIN_STALL" if confirmed_domain_stall else "HASHRATE_DEGRADATION"
+                    facts = {"auto_restart": True, "restart_requested_at": stamp, "attempt": auto_attempt,
+                             "trigger": auto_kind, "baseline_gh": expected, "observed_gh": hashrate,
+                             "duration_seconds": stamp - trigger_since,
+                             "domains": (confirmed_domain_stall or {}).get("domains"),
+                             "stalled_domain_indexes": (confirmed_domain_stall or {}).get("stalled_indexes")}
+                    facts["forensics"] = incident_metrics(incident_start, data)
+                    if degradation:
+                        facts.update({"loss_threshold_pct": AUTO_RESTART_LOSS * 100,
+                                      "threshold_gh": degradation["threshold"],
+                                      "lowest_gh": min(degradation_values or [hashrate]),
+                                      "average_gh": sum(degradation_values or [hashrate]) / len(degradation_values or [hashrate])})
+                    summary = (f"Mindestens zwei ASIC-Domains seit {trigger_after} Sekunden ohne Hashrate; automatischer Neustart angefordert"
+                               if confirmed_domain_stall else
+                               f"Hashrate seit {AUTO_RESTART_AFTER_SECONDS // 60} Minuten unter {AUTO_RESTART_LOSS * 100:.0f} % Verlust; automatischer Neustart angefordert")
+                    incident_id = create_incident(
+                        incident_start, auto_kind, auto_kind.replace("_", " "), summary,
+                        "warning", facts=facts, before_override=incident_before)
+                    attach_incident_sample(incident_id, stamp, "restart", data)
+                    set_state_value("last_auto_restart", stamp)
+                    last_auto_restart = stamp
+                    auto_mode = True
+                    auto_recovery_polls = 0
+                    reason = (f"ASIC-Domain-Stall: Domains {confirmed_domain_stall['stalled_indexes']} ohne Hashrate; AxeOS-Neustart angefordert"
+                              if confirmed_domain_stall else
+                              f"Hashrate {hashrate:.0f} GH/s unter {degradation['threshold']:.0f} GH/s; AxeOS-Neustart angefordert")
+                    details = {"reason": reason,
+                               "attempt": auto_attempt, **facts}
+                    try:
+                        _, _, request_status = restart_with_persisted_evidence(incident_id, data, details, stamp)
+                        if request_status == "cancelled_user_paused":
+                            discard_transient_auto_incident(incident_id)
+                            incident_id = incident_start = incident_before = incident_during = offline_since = None
+                            auto_mode = False
+                            auto_kind = None
+                            degraded_since = None
+                            domain_stall_since = None
+                            domain_stall_polls = 0
+                    except Exception as restart_error:
+                        add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
+                                  "Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
+                                  incident_id=incident_id, automatic=True,
+                                  details={"error_type": type(restart_error).__name__})
+
+                if auto_mode:
+                    attach_incident_sample(incident_id, stamp, "after_restart", data)
+                    expected = degradation_baseline or expected_hashrate(data)
+                    recovered = (expected > 0 and hashrate >= expected * 0.80
+                                 and (auto_kind != "ASIC_DOMAIN_STALL" or domains_recovered(data)))
+                    auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
+                    auto_uptime_reset = auto_uptime_reset or rebooted
+                    stored_forensics = persisted_incident_forensics(incident_id)
+                    facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
+                             "attempt": auto_attempt, "uptime_reset": auto_uptime_reset, "trigger": auto_kind,
+                             "observed_gh": hashrate,
+                             "domains": ((stored_forensics or {}).get("domains")
+                                         or list(domain_register_paths(data).values())),
+                             "baseline_gh": expected, "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
+                             "recovery_threshold_gh": expected * 0.80 if expected else None,
+                             "forensics": stored_forensics}
+                    update_incident(incident_id, facts=facts,
+                                    summary="Automatischer AxeOS-Neustart ausgelöst; Wiederherstellung wird geprüft")
+                    outcome = auto_restart_outcome(
+                        auto_attempt, stamp - auto_restart_stamp,
+                        auto_recovery_polls >= RECOVERY_POLLS)
+                    if outcome == "recovered":
+                        recovery = (f"Mining nach beobachtetem Neustart stabil ({hashrate:.0f} GH/s)" if auto_uptime_reset
+                                    else f"Mining nach Restart-Anforderung stabil; Neustart nicht nachgewiesen ({hashrate:.0f} GH/s)")
+                        update_incident(incident_id, ended_at=stamp, status="RESOLVED",
+                                        summary=recovery,
+                                        recovery=recovery,
+                                        after_sample=safe_payload(data), severity="warning", facts=facts)
+                        add_event("RECOVERED", "info", recovery, incident_id=incident_id,
+                                  automatic=True, details=facts)
                         incident_id = incident_start = incident_before = incident_during = offline_since = None
                         auto_mode = False
-                        auto_kind = None
                         degraded_since = None
                         domain_stall_since = None
                         domain_stall_polls = 0
-                except Exception as restart_error:
-                    add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
-                              "Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
-                              incident_id=incident_id, automatic=True,
-                              details={"error_type": type(restart_error).__name__})
-
-            if auto_mode:
-                attach_incident_sample(incident_id, stamp, "after_restart", data)
-                expected = degradation_baseline or expected_hashrate(data)
-                recovered = (expected > 0 and hashrate >= expected * 0.80
-                             and (auto_kind != "ASIC_DOMAIN_STALL" or domains_recovered(data)))
-                auto_recovery_polls = auto_recovery_polls + 1 if recovered else 0
-                auto_uptime_reset = auto_uptime_reset or rebooted
-                stored_forensics = persisted_incident_forensics(incident_id)
-                facts = {"auto_restart": True, "restart_requested_at": auto_restart_stamp,
-                         "attempt": auto_attempt, "uptime_reset": auto_uptime_reset, "trigger": auto_kind,
-                         "observed_gh": hashrate,
-                         "domains": ((stored_forensics or {}).get("domains")
-                                     or list(domain_register_paths(data).values())),
-                         "baseline_gh": expected, "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
-                         "recovery_threshold_gh": expected * 0.80 if expected else None,
-                         "forensics": stored_forensics}
-                update_incident(incident_id, facts=facts,
-                                summary="Automatischer AxeOS-Neustart ausgelöst; Wiederherstellung wird geprüft")
-                outcome = auto_restart_outcome(
-                    auto_attempt, stamp - auto_restart_stamp,
-                    auto_recovery_polls >= RECOVERY_POLLS)
-                if outcome == "recovered":
-                    recovery = f"Hashrate nach automatischem Neustart wieder stabil ({hashrate:.0f} GH/s)"
-                    update_incident(incident_id, ended_at=stamp, status="RESOLVED",
-                                    summary=("ASIC-Domain-Stall automatisch durch AxeOS-Neustart behoben"
-                                             if auto_kind == "ASIC_DOMAIN_STALL" else
-                                             "Hashrate-Degradation automatisch durch AxeOS-Neustart behoben"),
-                                    recovery=recovery,
-                                    after_sample=safe_payload(data), severity="warning", facts=facts)
-                    add_event("RECOVERED", "info", recovery, incident_id=incident_id,
-                              automatic=True, details=facts)
-                    incident_id = incident_start = incident_before = incident_during = offline_since = None
-                    auto_mode = False
-                    degraded_since = None
-                    domain_stall_since = None
-                    domain_stall_polls = 0
-                    auto_kind = None
-                    set_state_value("auto_restart_locked", "false")
-                elif outcome == "retry":
-                    auto_attempt += 1
-                    auto_restart_stamp = stamp
-                    last_auto_restart = stamp
-                    auto_recovery_polls = 0
-                    facts.update({"attempt": auto_attempt, "restart_requested_at": stamp})
-                    set_state_value("last_auto_restart", stamp)
-                    update_incident(incident_id, severity="warning", facts=facts,
-                                    summary="Erster Neustart ohne ausreichende Erholung; zweiter Versuch angefordert")
-                    attach_incident_sample(incident_id, stamp, "retry", data)
-                    details = {"reason": "Erster Neustart erfolglos; zweiter und letzter Versuch angefordert",
-                               "attempt": auto_attempt, **facts}
-                    try:
-                        if automatic_restarts_since(stamp - 3600) >= AUTO_RESTART_MAX_ATTEMPTS:
-                            raise RuntimeError("rolling_restart_limit")
-                        _, _, request_status = restart_with_persisted_evidence(incident_id, data, details, stamp)
-                        if request_status == "cancelled_user_paused":
-                            update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="warning",
-                                            summary="Zweiter Neustart durch bewusste Benutzerpause abgebrochen",
-                                            recovery="Mining wurde über AxeOS pausiert")
-                            auto_mode = False
-                            auto_kind = None
-                    except Exception as restart_error:
-                        add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
-                                  "Zweiter Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
-                                  incident_id=incident_id, automatic=True,
-                                  details={"error_type": type(restart_error).__name__})
-                elif outcome == "lock":
-                    message = "Hashrate nach zwei automatischen Neustarts nicht erholt; Automatik bis zur nächsten stabilen Erholung gesperrt"
-                    update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="critical",
-                                    summary=message, recovery=message, after_sample=safe_payload(data), facts=facts)
-                    add_event("AUTO_RESTART_FAILED", "critical", message)
-                    incident_id = incident_start = incident_before = incident_during = offline_since = None
-                    auto_mode = False
-                    auto_locked = True
-                    auto_kind = None
-                    set_state_value("auto_restart_locked", "true")
-                    degraded_since = stamp
-                state = "RECOVERING" if auto_mode else ("ONLINE" if recovered else "DEGRADED")
-                with db() as con:
-                    con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('health_state',?)", (state,))
-                time.sleep(max(1, POLL_SECONDS - (time.monotonic() - started)))
-                continue
-            if stopped:
-                if stopped_polls == 0:
-                    incident_before = old
-                stopped_polls += 1
-                incident_during = data
-            else:
-                stopped_polls = 0
-            if incident_id is None and (fact or stopped_polls >= STALL_AFTER_POLLS):
-                incident_start = stamp if fact else stamp - POLL_SECONDS * (STALL_AFTER_POLLS - 1)
-                kind, reason = classify_incident(incident_before, data)
-                incident_id = create_incident(incident_start, kind, kind.replace("_", " "),
-                                              reason or "Ursache nicht eindeutig", "critical" if fact else "warning",
-                                              fact, {"controller_reachable": True, "uptime_reset": False},
-                                              incident_before)
+                        auto_kind = None
+                        set_state_value("auto_restart_locked", "false")
+                    elif outcome == "retry":
+                        auto_attempt += 1
+                        auto_restart_stamp = stamp
+                        last_auto_restart = stamp
+                        auto_recovery_polls = 0
+                        facts.update({"attempt": auto_attempt, "restart_requested_at": stamp})
+                        set_state_value("last_auto_restart", stamp)
+                        update_incident(incident_id, severity="warning", facts=facts,
+                                        summary="Erster Neustart ohne ausreichende Erholung; zweiter Versuch angefordert")
+                        attach_incident_sample(incident_id, stamp, "retry", data)
+                        details = {"reason": "Erster Neustart erfolglos; zweiter und letzter Versuch angefordert",
+                                   "attempt": auto_attempt, **facts}
+                        try:
+                            if automatic_restarts_since(stamp - 3600) >= AUTO_RESTART_MAX_ATTEMPTS:
+                                raise RuntimeError("rolling_restart_limit")
+                            _, _, request_status = restart_with_persisted_evidence(incident_id, data, details, stamp)
+                            if request_status == "cancelled_user_paused":
+                                update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="warning",
+                                                summary="Zweiter Neustart durch bewusste Benutzerpause abgebrochen",
+                                                recovery="Mining wurde über AxeOS pausiert")
+                                auto_mode = False
+                                auto_kind = None
+                        except Exception as restart_error:
+                            add_event("AUTO_RECOVERY_SUPPRESSED", "critical",
+                                      "Zweiter Neustart nicht ausgeführt: Diagnose konnte nicht sicher gespeichert werden",
+                                      incident_id=incident_id, automatic=True,
+                                      details={"error_type": type(restart_error).__name__})
+                    elif outcome == "lock":
+                        message = "Hashrate nach zwei automatischen Neustarts nicht erholt; Automatik bis zur nächsten stabilen Erholung gesperrt"
+                        update_incident(incident_id, ended_at=stamp, status="RESOLVED", severity="critical",
+                                        summary=message, recovery=message, after_sample=safe_payload(data), facts=facts)
+                        add_event("AUTO_RESTART_FAILED", "critical", message)
+                        incident_id = incident_start = incident_before = incident_during = offline_since = None
+                        auto_mode = False
+                        auto_locked = True
+                        auto_kind = None
+                        set_state_value("auto_restart_locked", "true")
+                        degraded_since = stamp
+                    state = "RECOVERING" if auto_mode else ("ONLINE" if recovered else "DEGRADED")
+                    with db() as con:
+                        con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('health_state',?)", (state,))
+                    time.sleep(max(1, POLL_SECONDS - (time.monotonic() - started)))
+                    continue
+                if stopped:
+                    if stopped_polls == 0:
+                        incident_before = old
+                    stopped_polls += 1
+                    incident_during = data
+                else:
+                    stopped_polls = 0
+                if incident_id is None and (fact or stopped_polls >= STALL_AFTER_POLLS):
+                    incident_start = stamp if fact else stamp - POLL_SECONDS * (STALL_AFTER_POLLS - 1)
+                    kind, reason = classify_incident(incident_before, data)
+                    incident_id = create_incident(incident_start, kind, kind.replace("_", " "),
+                                                  reason or "Ursache nicht eindeutig", "critical" if fact else "warning",
+                                                  fact, {"controller_reachable": True, "uptime_reset": False},
+                                                  incident_before)
+                    successes = 0
+                if incident_id:
+                    attach_incident_sample(incident_id, stamp, "during", data)
+                    offline_duration = 0 if offline_since is None else stamp - offline_since
+                    kind, reason = classify_incident(incident_before, incident_during or data, data if rebooted else {}, offline_duration)
+                    facts = {"controller_reachable": True, "uptime_reset": rebooted,
+                             "offline_seconds": offline_duration, "reset_reason": data.get("resetReason") if rebooted else None}
+                    update_incident(incident_id, kind=kind, title=kind.replace("_", " "),
+                                    summary=reason or "Ursache nicht eindeutig", observed_cause=fact, facts=facts)
+                    if not stopped and successes >= RECOVERY_POLLS:
+                        recovery = ("Mining nach Neustart stabil" if rebooted else "Mining wieder stabil")
+                        update_incident(incident_id, ended_at=stamp, status="RESOLVED", recovery=recovery,
+                                        after_sample=safe_payload(data), severity="warning")
+                        add_event("RECOVERED", "info", recovery)
+                        incident_id = incident_start = incident_before = incident_during = offline_since = None
+                if pause_now:
+                    state = "USER PAUSED"
+                elif state in {"OFFLINE", "RECOVERING", "USER PAUSED"}:
+                    state = "RECOVERING" if successes < RECOVERY_POLLS else "ONLINE"
+                else:
+                    state = "DEGRADED" if stopped_polls else "ONLINE"
+            except IdentityPending:
+                state = 'IDENTITY REQUIRED'
+                successes = failures = 0
+            except Exception as exc:
+                if catalog and catalog.get()['fingerprint'] is None:
+                    set_state_value('health_state', 'WAITING FOR DEVICE')
+                    return
+                failures += 1
                 successes = 0
-            if incident_id:
-                attach_incident_sample(incident_id, stamp, "during", data)
-                offline_duration = 0 if offline_since is None else stamp - offline_since
-                kind, reason = classify_incident(incident_before, incident_during or data, data if rebooted else {}, offline_duration)
-                facts = {"controller_reachable": True, "uptime_reset": rebooted,
-                         "offline_seconds": offline_duration, "reset_reason": data.get("resetReason") if rebooted else None}
-                update_incident(incident_id, kind=kind, title=kind.replace("_", " "),
-                                summary=reason or "Ursache nicht eindeutig", observed_cause=fact, facts=facts)
-                if not stopped and successes >= RECOVERY_POLLS:
-                    recovery = ("Mining nach Neustart stabil" if rebooted else "Mining wieder stabil")
-                    update_incident(incident_id, ended_at=stamp, status="RESOLVED", recovery=recovery,
-                                    after_sample=safe_payload(data), severity="warning")
-                    add_event("RECOVERED", "info", recovery)
-                    incident_id = incident_start = incident_before = incident_during = offline_since = None
-            if pause_now:
-                state = "USER PAUSED"
-            elif state in {"OFFLINE", "RECOVERING", "USER PAUSED"}:
-                state = "RECOVERING" if successes < RECOVERY_POLLS else "ONLINE"
-            else:
-                state = "DEGRADED" if stopped_polls else "ONLINE"
-        except Exception as exc:
-            failures += 1
-            successes = 0
-            state = "DEGRADED" if failures < OFFLINE_AFTER_POLLS else "OFFLINE"
-            if failures == OFFLINE_AFTER_POLLS and not auto_mode:
-                offline_since = now() - POLL_SECONDS * (OFFLINE_AFTER_POLLS - 1)
-                offline_context = offline_event_context()
-                planned_pause = offline_context["planned"]
-                if incident_id is None and not planned_pause:
-                    incident_start = offline_since
-                    incident_before = previous()
-                    incident_id = create_incident(incident_start, "UNKNOWN", "GERÄT NICHT ERREICHBAR",
-                                                  "API seit mehreren Polls nicht erreichbar", "critical",
-                                                  facts={"controller_reachable": False}, before_override=incident_before)
-                add_event("OFFLINE", offline_context["severity"], offline_context["message"],
-                          details={"after_user_pause": planned_pause})
-            if incident_id and not auto_mode:
-                update_incident(incident_id, summary="API nicht erreichbar; Ursache noch nicht eindeutig",
-                                facts={"controller_reachable": False, "failed_polls": failures})
-            print("poll failed:", type(exc).__name__, flush=True)
-        with db() as con:
-            con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('health_state',?)", (state,))
+                state = "DEGRADED" if failures < OFFLINE_AFTER_POLLS else "OFFLINE"
+                if failures == OFFLINE_AFTER_POLLS and not auto_mode:
+                    offline_since = now() - POLL_SECONDS * (OFFLINE_AFTER_POLLS - 1)
+                    offline_context = offline_event_context()
+                    planned_pause = offline_context["planned"]
+                    if incident_id is None and not planned_pause:
+                        incident_start = offline_since
+                        incident_before = previous()
+                        incident_id = create_incident(incident_start, "UNKNOWN", "GERÄT NICHT ERREICHBAR",
+                                                      "API seit mehreren Polls nicht erreichbar", "critical",
+                                                      facts={"controller_reachable": False}, before_override=incident_before)
+                    add_event("OFFLINE", offline_context["severity"], offline_context["message"],
+                              details={"after_user_pause": planned_pause})
+                if incident_id and not auto_mode:
+                    update_incident(incident_id, summary="API nicht erreichbar; Ursache noch nicht eindeutig",
+                                    facts={"controller_reachable": False, "failed_polls": failures})
+                print("poll failed:", type(exc).__name__, flush=True)
+            with db() as con:
+                con.execute("INSERT OR REPLACE INTO monitor_state(key,value) VALUES('health_state',?)", (state,))
         time.sleep(max(1, POLL_SECONDS - (time.monotonic() - started)))
+
+
+def poller():
+    while True:
+        try:
+            with generation_lock:
+                if catalog:
+                    catalog.finish_operations()
+            with use_database(catalog.database() if catalog else DB_PATH):
+                poll_generation()
+        except (OSError, sqlite3.Error, RuntimeError) as exc:
+            print('monitor waiting:', type(exc).__name__, flush=True)
+        time.sleep(POLL_SECONDS)
+
+
+def initialize_database(path):
+    with use_database(path):
+        init_db()
+
+
+def initialize_storage():
+    global catalog
+    original = Path(DB_PATH)
+    if original.exists():
+        with connection(original) as con:
+            migrated = con.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone()
+            ready = migrated and con.execute('SELECT 1 FROM schema_migrations WHERE version=4').fetchone()
+        if not ready:
+            destination = original.parent / 'backups' / ('migration-' + str(now()) + '-' + uuid.uuid4().hex[:8]) / 'telemetry.sqlite3'
+            backup(original, destination)
+    catalog = Catalog(DB_PATH)
+    catalog.finish_operations()
+    initialize_database(catalog.database())
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1570,7 +1824,46 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        try:
+            with generation_lock:
+                selected = parse_qs(urlparse(self.path).query).get('generation', [None])[0]
+                path = catalog.database(selected) if catalog else DB_PATH
+                with use_database(path):
+                    return self.read_request()
+        except ValueError as exc:
+            return self.send_json({'error': str(exc)}, 400)
+
+    def read_request(self):
         p = urlparse(self.path)
+        if p.path == '/dashboard.js':
+            body = Path(__file__).with_name('dashboard.js').read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/javascript; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
+        if p.path == '/api/generations':
+            return self.send_json(catalog.public() if catalog else {'active': 'local', 'generations': []})
+        if p.path == '/api/generations/preview':
+            return self.send_json(catalog.preview() if catalog else {})
+        if p.path == '/api/diagnostics':
+            return self.send_json(diagnostic_history())
+        if p.path == '/api/timeline':
+            with db() as con:
+                rows = con.execute('''SELECT id,started_at ts,kind,severity,title message,'incident' source
+                    FROM incidents UNION ALL SELECT id,ts,kind,severity,message,'event' source
+                    FROM events WHERE incident_id IS NULL ORDER BY ts DESC LIMIT 200''').fetchall()
+            return self.send_json([dict(row) for row in rows])
+        if p.path == '/api/storage':
+            with db() as con:
+                pages = con.execute('PRAGMA page_count').fetchone()[0]
+                size = con.execute('PRAGMA page_size').fetchone()[0]
+                count = con.execute('SELECT COUNT(*) FROM samples').fetchone()[0]
+                first = con.execute('SELECT MIN(ts) FROM samples').fetchone()[0]
+                sessions = con.execute('SELECT COUNT(*) FROM boot_sessions').fetchone()[0]
+            return self.send_json({'bytes': pages * size, 'samples': count, 'started_at': first,
+                                   'boot_sessions': sessions, 'retention': 'Keine automatische Löschung'})
         if p.path == "/":
             body = HTML.encode()
             self.send_response(200)
@@ -1582,7 +1875,7 @@ class Handler(BaseHTTPRequestHandler):
             with db() as con:
                 row = con.execute("SELECT MAX(ts) FROM samples").fetchone()
             age = None if not row[0] else now() - row[0]
-            return self.send_json({"status": "ok" if age is not None and age < POLL_SECONDS * 3 else "degraded", "last_sample_age": age}, 200 if age is not None and age < POLL_SECONDS * 3 else 503)
+            return self.send_json({"status": "ok", "device": "online" if age is not None and age < POLL_SECONDS * 3 else "waiting", "last_sample_age": age})
         if p.path == "/api/settings/auto-restart":
             return self.send_json({"enabled": auto_restart_enabled(),
                                    "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
@@ -1593,7 +1886,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "max_attempts": AUTO_RESTART_MAX_ATTEMPTS,
                                    "locked": state_value("auto_restart_locked", "false").lower() == "true"})
         if p.path == "/api/layouts":
-            with db() as con:
+            with connection(DB_PATH) as con:
                 rows = con.execute("SELECT name,layout_json,created_at,updated_at "
                                    "FROM dashboard_layouts ORDER BY name COLLATE NOCASE").fetchall()
             return self.send_json([{"name": row["name"], "layout": json.loads(row["layout_json"]),
@@ -1619,10 +1912,12 @@ class Handler(BaseHTTPRequestHandler):
             age = now() - row["ts"]
             data = safe_payload(json.loads(row["payload"]))
             accepted, rejected = data.get("sharesAccepted") or 0, data.get("sharesRejected") or 0
-            data["rejectRate"] = rejected * 100 / max(1, accepted + rejected)
+            data["rejectRate"] = rejected * 100 / (accepted + rejected) if accepted + rejected else None
             expected = data.get("expectedHashrate") or EXPECTED_HASHRATE or None
             data["expectedHashrate"] = expected
             state = state_row[0] if state_row else ("ONLINE" if age < POLL_SECONDS * 3 else "OFFLINE")
+            if state_value('generation_ended_at'):
+                state = 'ARCHIVED'
             if state == "DEGRADED" and (data.get("hashRate") or 0) <= 10:
                 state = "MINING STALLED"
             summary = health_summary(state, data, last_incident[0] if last_incident else None)
@@ -1705,22 +2000,55 @@ class Handler(BaseHTTPRequestHandler):
             ranges = {"1h": 3600, "24h": 86400, "7d": 604800}
             seconds = ranges.get(parse_qs(p.query).get("range", ["1h"])[0], 3600)
             bucket = max(10, seconds // 600)
-            end = now()
+            end = min(now(), int(state_value('generation_ended_at', now())))
             start = end - seconds
             return self.send_json({"start": start, "end": end, "samples": chart_history(start, end, bucket),
                                    "markers": chart_markers(start, end)})
         self.send_error(404)
 
     def do_POST(self):
+        try:
+            with generation_lock:
+                selected = parse_qs(urlparse(self.path).query).get('generation', [None])[0]
+                if catalog and selected and selected != catalog.active():
+                    return self.send_json({'error': 'Archiv ist schreibgeschützt'}, 409)
+                with use_database(catalog.database() if catalog else DB_PATH):
+                    return self.write_request()
+        except (ValueError, IdentityPending) as exc:
+            return self.send_json({'error': str(exc)}, 409)
+        except (OSError, sqlite3.Error, RuntimeError):
+            return self.send_json({'error': 'Vorgang fehlgeschlagen; bestehende Historie bleibt erhalten'}, 503)
+
+    def write_request(self):
+        global miner_address
         path = urlparse(self.path).path
         pause_match = re.fullmatch(r"/api/incidents/(\d+)/confirm-user-pause", path)
-        if path not in {"/api/settings/auto-restart", "/api/settings/mining-profile", "/api/layouts"} and not pause_match:
+        if path not in {"/api/settings/auto-restart", "/api/settings/mining-profile", "/api/layouts", '/api/generations/switch', '/api/backup'} and not pause_match:
             return self.send_error(404)
         try:
             length = min(65536, int(self.headers.get("Content-Length", "0")))
             payload = json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, json.JSONDecodeError):
             return self.send_json({"error": "invalid JSON"}, 400)
+        if not isinstance(payload, dict):
+            return self.send_json({'error': 'JSON-Objekt erforderlich'}, 400)
+        if path == '/api/backup':
+            result = backup(database_path(), Path(DB_PATH).parent / 'backups' / (uuid.uuid4().hex + '.sqlite3'))
+            return self.send_json(result)
+        if path == '/api/generations/switch':
+            if not catalog or payload.get('confirmed') is not True:
+                return self.send_json({'error': 'Die Gerätezuordnung muss bestätigt werden'}, 400)
+            raw = fetch_bitaxe_info()
+            catalog.validate_preview(payload.get('token'), raw)
+            if payload.get('bind_existing') is True and payload.get('existing_device_confirmed') is not True:
+                return self.send_json({'error': 'Zuordnung zum Altgerät muss ausdrücklich bestätigt werden'}, 400)
+            generation = catalog.switch(payload.get('expected'), payload.get('operation'), payload.get('label'),
+                                        raw, initialize_database, payload.get('bind_existing') is True)
+            hashrate_cache.update({'updated': 0, 'data': {}})
+            with market_lock:
+                miner_address = None
+                market_cache['miner'] = {}
+            return self.send_json({'active': generation})
         if pause_match:
             if payload.get("confirmed") is not True:
                 return self.send_json({"error": "Historische Benutzerpause muss ausdrücklich bestätigt werden"}, 400)
@@ -1737,6 +2065,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "Profilwechsel muss ausdrücklich bestätigt werden"}, 400)
             try:
                 current = fetch_bitaxe_info()
+                if catalog and not catalog.observe(current, clean(current)):
+                    raise IdentityPending('Gerät zuerst zuordnen; kein Profil wurde geändert')
                 if str(current.get("ASICModel")) != "BM1370" or str(current.get("boardVersion")) != "601":
                     return self.send_json({"error": "Profile sind nur für Gamma 601 / BM1370 freigegeben"}, 409)
                 if current.get("power_fault") or current.get("hardware_fault") or current.get("overheat_mode"):
@@ -1761,8 +2091,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 name = validate_layout_name(payload.get("name"))
                 layout = validate_dashboard_layout(payload.get("layout"))
-                if not store_dashboard_layout(name, layout, payload.get("overwrite") is True):
-                    return self.send_json({"error": "Dieses Layout existiert nicht"}, 404)
+                with use_database(DB_PATH):
+                    if not store_dashboard_layout(name, layout, payload.get("overwrite") is True):
+                        return self.send_json({"error": "Dieses Layout existiert nicht"}, 404)
             except sqlite3.IntegrityError:
                 return self.send_json({"error": "Dieser Layoutname existiert bereits"}, 409)
             except ValueError as error:
@@ -1770,6 +2101,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"name": name, "layout": layout}, 201)
         if not isinstance(payload.get("enabled"), bool):
             return self.send_json({"error": "enabled must be boolean"}, 400)
+        if payload['enabled'] and catalog:
+            raw = fetch_bitaxe_info()
+            if not catalog.observe(raw, clean(raw)):
+                raise IdentityPending('Auto-Restart erst nach bestätigter Gerätezuordnung möglich')
         set_state_value("auto_restart_enabled", str(payload["enabled"]).lower())
         add_event("AUTO_RESTART_SETTING", "info",
                   "Automatischer Hashrate-Neustart " + ("aktiviert" if payload["enabled"] else "deaktiviert"))
@@ -1777,7 +2112,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    init_db()
+    initialize_storage()
     backfill_historical_incidents()
     threading.Thread(target=poller, daemon=True).start()
     threading.Thread(target=market_poller, daemon=True).start()

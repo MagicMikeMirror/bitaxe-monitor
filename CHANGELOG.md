@@ -148,3 +148,12 @@
 - Input current calculated from measured power and input voltage; raw AxeOS current remains diagnostic only.
 - Improved reject information, block-candidate wording, health summary and incident timeline.
 - Additive SQLite migration that preserves all existing samples and events.
+# 1.4.0 — 2026-09-25
+
+- Preserve the old device history while waiting for a replacement; require explicit identity assignment before ingest or recovery.
+- Isolate generations in separate SQLite files with HMAC identities, verified backups and restart-safe switch operations.
+- Add boot/counter epochs, unique sample IDs and deterministic connection cleanup.
+- Add domain/error/heap diagnostics, a separate voltage plot, windowed efficiency and share quality, and a unified timeline.
+- Record configuration changes; distinguish regulator faults from external power interruptions and observed restarts from recovery requests.
+- Keep Bitcoin price and block value expanded; refresh market data without a connected miner.
+- Preserve existing raw samples and layouts. No destructive reset or automatic retention deletion.

@@ -2,7 +2,7 @@ FROM python:3.12-alpine
 
 RUN addgroup -S monitor && adduser -S -G monitor monitor
 WORKDIR /app
-COPY --chown=monitor:monitor app.py /app/app.py
+COPY --chown=monitor:monitor app.py device_history.py telemetry.py dashboard.js /app/
 RUN mkdir -p /data && chown monitor:monitor /data
 
 USER monitor
