@@ -83,9 +83,15 @@ class PrivacyTests(unittest.TestCase):
                 "last_share_at": 1790532923,
             }],
         }
+        requested = []
+        def fetch(url):
+            requested.append(url)
+            return payload
         result = APP.pool_miner_stats(
-            "stratum.btcpowlab-pool.com", "bc1q-test", lambda _url: payload)
+            "stratum.btcpowlab-pool.com", "bc1q-test", fetch)
         self.assertEqual(result["poolLabel"], "BTC PoW Lab")
+        self.assertEqual(requested, [
+            "https://btcpowlab-pool.com/public/v1/miner/bc1q-test/summary"])
         self.assertEqual(result["hashRate"], 500_000_000_000)
         self.assertEqual(result["bestDifficulty"], 123456)
         self.assertEqual(result["workers"][0]["name"], "rig")
