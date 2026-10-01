@@ -76,13 +76,10 @@ class PrivacyTests(unittest.TestCase):
         payload = {
             "hashrate_5m_hs": 500_000_000_000,
             "best_share_difficulty": 123456,
-            "workers_total": 1,
             "last_share_at": 1790532923,
             "workers": [{
-                "worker_id": "wallet.rig",
                 "name": "rig",
                 "hashrate_5m_hs": 500_000_000_000,
-                "best_share_difficulty": 123456,
                 "last_share_at": 1790532923,
             }],
         }

@@ -1023,9 +1023,9 @@ def pool_miner_stats(host, address, fetch=get_json):
             "workers": workers,
         }
     if host == "stratum.btcpowlab-pool.com":
-        client = fetch("https://btcpowlab-pool.com/public/v1/miner/" + quote(address, safe=""))
+        client = fetch("https://btcpowlab-pool.com/public/v1/miner/" + quote(address, safe="") + "/summary")
         workers = [{
-            "name": w.get("name") or w.get("worker_id"),
+            "name": w.get("name"),
             "payoutMode": "hybrid solo",
             "bestDifficulty": w.get("best_share_difficulty"),
             "hashRate": w.get("hashrate_5m_hs"),
@@ -1037,7 +1037,7 @@ def pool_miner_stats(host, address, fetch=get_json):
         return {
             "poolLabel": "BTC PoW Lab",
             "bestDifficulty": client.get("best_share_difficulty"),
-            "workersCount": client.get("workers_total") if client.get("workers_total") is not None else len(workers),
+            "workersCount": len(workers),
             "hashRate": client.get("hashrate_5m_hs"),
             "soloWork": None,
             "lastSeen": (datetime.fromtimestamp(float(last_share), timezone.utc).isoformat()
