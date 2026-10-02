@@ -267,7 +267,7 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.6.0` from source or
+Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.6.1` from source or
 use its published image when available, and recreate the container. The sample
 table and existing history remain unchanged; schema version 5 only adds the
 aggregate table. Startup creates verified pre-migration backups and does not bind

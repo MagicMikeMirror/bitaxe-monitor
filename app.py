@@ -300,6 +300,7 @@ def init_db():
         con.execute('''CREATE TABLE IF NOT EXISTS counter_epochs(
             id TEXT PRIMARY KEY, boot_id TEXT NOT NULL REFERENCES boot_sessions(id),
             started_at INTEGER NOT NULL, reason TEXT NOT NULL)''')
+    backfill_legacy_reboots()
 
 
 AGGREGATE_COLUMNS = {
@@ -1338,6 +1339,52 @@ def record_device_reboot(before, after, stamp, log_evidence=None):
                        "reset_reason_confidence": evidence["reset_reason_confidence"],
                        "category": category, "correlations": correlations["flags"]})
     return incident_id
+
+
+def backfill_legacy_reboots():
+    """Turn reliable legacy uptime-reset events into auditable reboot incidents once."""
+    with db() as con:
+        rows = con.execute("""SELECT id,ts,message FROM events
+            WHERE kind='REBOOT' AND incident_id IS NULL ORDER BY ts""").fetchall()
+    for event in rows:
+        with db() as con:
+            before_row = con.execute("SELECT ts,payload FROM samples WHERE ts<? ORDER BY ts DESC LIMIT 1",
+                                     (event["ts"],)).fetchone()
+            after_row = con.execute("SELECT ts,payload FROM samples WHERE ts>=? ORDER BY ts LIMIT 1",
+                                    (event["ts"],)).fetchone()
+        before = (safe_payload(json.loads(before_row["payload"])) | {"ts": before_row["ts"]}) if before_row else {}
+        after = (safe_payload(json.loads(after_row["payload"])) | {"ts": after_row["ts"]}) if after_row else {}
+        reported = after.get("resetReason")
+        if not reported and ":" in event["message"]:
+            reported = event["message"].split(":", 1)[1].strip() or None
+        evidence = reset_reason_evidence(reported)
+        correlations = reboot_correlations(event["ts"], before, after)
+        facts = {"reboot_detected": True, **evidence,
+                 "previous_uptime_seconds": before.get("uptimeSeconds"),
+                 "new_uptime_seconds": after.get("uptimeSeconds"),
+                 "last_successful_sample_before": before or None,
+                 "first_successful_sample_after": after or None,
+                 "correlations": correlations,
+                 "diagnostic_window": {"before_seconds": 300, "after_seconds": 300},
+                 "historical_reconstruction": True,
+                 "legacy_event_id": event["id"]}
+        category = evidence["category"]
+        summary = ("Historischer Neustart erkannt; Ursache unbekannt" if category == "UNKNOWN" else
+                   f"Historischer Neustart; gemeldete Reset-Kategorie {category}")
+        incident_id = create_incident(event["ts"], "DEVICE_REBOOT", "DEVICE REBOOT", summary,
+                                      "warning", facts=facts, before_override=before or None)
+        if after:
+            attach_incident_sample(incident_id, after["ts"], "first_after_reboot", after)
+        update_incident(incident_id, ended_at=event["ts"], status="RESOLVED",
+                        recovery="Historisches Reboot-Ereignis rekonstruiert",
+                        after_sample=after or None, facts=facts)
+        with db() as con:
+            con.execute("""UPDATE events SET kind='DEVICE_REBOOT',incident_id=?,details=? WHERE id=?""",
+                        (incident_id, json.dumps({"historical_reconstruction": True,
+                         "reported_reset_reason": reported,
+                         "reset_reason_source": evidence["reset_reason_source"],
+                         "reset_reason_confidence": evidence["reset_reason_confidence"],
+                         "category": category}, separators=(",", ":")), event["id"]))
 
 
 def classify_incident(before, during, after=None, offline_seconds=0):
