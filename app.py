@@ -22,6 +22,9 @@ API_URL = os.getenv("BITAXE_API_URL", "http://192.168.1.100/api/system/info")
 DB_PATH = os.getenv("DB_PATH", "/data/bitaxe.sqlite3")
 POLL_SECONDS = max(5, int(os.getenv("POLL_SECONDS", "10")))
 PORT = int(os.getenv("PORT", "8080"))
+RAW_RETENTION_DAYS = max(1, int(os.getenv("RAW_RETENTION_DAYS", "30")))
+HOURLY_RETENTION_DAYS = max(RAW_RETENTION_DAYS + 1, int(os.getenv("HOURLY_RETENTION_DAYS", "365")))
+RETENTION_INTERVAL_SECONDS = max(3600, int(os.getenv("RETENTION_INTERVAL_SECONDS", "86400")))
 POWER_HIGH = float(os.getenv("POWER_HIGH_W", "35"))
 TEMP_HIGH = float(os.getenv("TEMP_HIGH_C", "75"))
 HASHRATE_LOW = float(os.getenv("HASHRATE_LOW_GH", "750"))
@@ -237,6 +240,19 @@ def migrate_schema(con):
         con.execute('ALTER TABLE samples_v4 RENAME TO samples')
         con.execute('CREATE INDEX idx_samples_ts ON samples(ts)')
         con.execute('INSERT INTO schema_migrations VALUES(4,?)', (now(),))
+    if 5 not in applied:
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS telemetry_aggregates(
+          period TEXT NOT NULL CHECK(period IN ('hour','day')),
+          period_start INTEGER NOT NULL, metric TEXT NOT NULL,
+          min_value REAL, max_value REAL, avg_value REAL,
+          sample_count INTEGER NOT NULL, sum_value REAL,
+          PRIMARY KEY(period,period_start,metric)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telemetry_aggregates_range
+          ON telemetry_aggregates(period,period_start);
+        """)
+        con.execute('INSERT INTO schema_migrations VALUES(5,?)', (now(),))
 
 
 def init_db():
@@ -283,6 +299,136 @@ def init_db():
         con.execute('''CREATE TABLE IF NOT EXISTS counter_epochs(
             id TEXT PRIMARY KEY, boot_id TEXT NOT NULL REFERENCES boot_sessions(id),
             started_at INTEGER NOT NULL, reason TEXT NOT NULL)''')
+
+
+AGGREGATE_COLUMNS = {
+    "hashrate": "hashrate", "power": "power", "voltage": "voltage",
+    "temp": "temp", "vr_temp": "vr_temp", "fan_rpm": "fan_rpm",
+    "core_voltage": "core_voltage", "frequency": "frequency",
+    "error_pct": "error_pct", "response_ms": "response_ms",
+}
+
+
+def _aggregate(values):
+    values = [float(value) for value in values if isinstance(value, (int, float))]
+    if not values:
+        return None
+    return min(values), max(values), sum(values) / len(values), len(values), sum(values)
+
+
+def _accumulate(groups, key, value, count=1, total=None, minimum=None, maximum=None):
+    if not isinstance(value, (int, float)) or count <= 0:
+        return
+    total = float(value) * count if total is None else float(total)
+    minimum = float(value) if minimum is None else float(minimum)
+    maximum = float(value) if maximum is None else float(maximum)
+    prior = groups.get(key)
+    if prior:
+        groups[key] = (min(prior[0], minimum), max(prior[1], maximum),
+                       prior[2] + total, prior[3] + count)
+    else:
+        groups[key] = (minimum, maximum, total, count)
+
+
+def _finish_accumulator(value):
+    minimum, maximum, total, count = value
+    return minimum, maximum, total / count, count, total
+
+
+def _raw_metrics(row):
+    result = {"_samples": 1, **{metric: row[column] for metric, column in AGGREGATE_COLUMNS.items()}}
+    payload = json.loads(row["payload"] or "{}")
+    accepted, rejected = payload.get("sharesAccepted"), payload.get("sharesRejected")
+    if isinstance(accepted, (int, float)) and isinstance(rejected, (int, float)) and accepted + rejected:
+        result["reject_rate"] = rejected * 100.0 / (accepted + rejected)
+    domains = (((payload.get("hashrateMonitor") or {}).get("asics") or [{}])[0].get("domains") or [])
+    for index, value in enumerate(domains[:4]):
+        result[f"domain_{index + 1}"] = value
+    return result
+
+
+def _store_aggregate(con, period, period_start, metric, aggregate):
+    con.execute("""INSERT OR REPLACE INTO telemetry_aggregates
+        (period,period_start,metric,min_value,max_value,avg_value,sample_count,sum_value)
+        VALUES(?,?,?,?,?,?,?,?)""", (period, period_start, metric, *aggregate))
+
+
+def run_retention(path=None, stamp=None, fail_after_aggregation=False):
+    """Roll raw -> hourly -> daily atomically for one generation database."""
+    stamp = int(stamp or now())
+    raw_cutoff = ((stamp - RAW_RETENTION_DAYS * 86400) // 3600) * 3600
+    hourly_cutoff = ((stamp - HOURLY_RETENTION_DAYS * 86400) // 86400) * 86400
+    target = path or database_path()
+    before_size = Path(target).stat().st_size if Path(target).exists() else 0
+    result = {"hourly_periods": 0, "daily_periods": 0, "raw_deleted": 0,
+              "hourly_deleted": 0, "bytes_before": before_size, "started_at": stamp}
+    print(f"retention start database={Path(target).name}", flush=True)
+    try:
+        with connection(target) as con:
+            raw_rows = con.execute("""SELECT * FROM samples WHERE ts<?
+                ORDER BY ts,id""", (raw_cutoff,)).fetchall()
+            hourly = {}
+            for row in raw_rows:
+                period_start = row["ts"] // 3600 * 3600
+                for metric, value in _raw_metrics(row).items():
+                    _accumulate(hourly, (period_start, metric), value)
+            for (period_start, metric), values in hourly.items():
+                _store_aggregate(con, "hour", period_start, metric, _finish_accumulator(values))
+            result["hourly_periods"] = len({key[0] for key in hourly})
+
+            hour_rows = con.execute("""SELECT * FROM telemetry_aggregates
+                WHERE period='hour' AND period_start<? ORDER BY period_start,metric""",
+                                    (hourly_cutoff,)).fetchall()
+            daily = {}
+            for row in hour_rows:
+                day = row["period_start"] // 86400 * 86400
+                _accumulate(daily, (day, row["metric"]), row["avg_value"], row["sample_count"],
+                            row["sum_value"], row["min_value"], row["max_value"])
+            for (period_start, metric), values in daily.items():
+                _store_aggregate(con, "day", period_start, metric, _finish_accumulator(values))
+            result["daily_periods"] = len({key[0] for key in daily})
+            if fail_after_aggregation:
+                raise RuntimeError("simulated retention failure")
+
+            if raw_rows:
+                expected = len({row["ts"] // 3600 * 3600 for row in raw_rows})
+                stored = con.execute("""SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates
+                    WHERE period='hour' AND period_start<? AND metric='_samples'""", (raw_cutoff,)).fetchone()[0]
+                if stored < expected:
+                    raise RuntimeError("hourly aggregate verification failed")
+                result["raw_deleted"] = con.execute("DELETE FROM samples WHERE ts<?", (raw_cutoff,)).rowcount
+            if hour_rows:
+                expected = len({row["period_start"] // 86400 * 86400 for row in hour_rows})
+                stored = con.execute("""SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates
+                    WHERE period='day' AND period_start<? AND metric='_samples'""", (hourly_cutoff,)).fetchone()[0]
+                if stored < expected:
+                    raise RuntimeError("daily aggregate verification failed")
+                result["hourly_deleted"] = con.execute("""DELETE FROM telemetry_aggregates
+                    WHERE period='hour' AND period_start<?""", (hourly_cutoff,)).rowcount
+            con.execute("INSERT OR REPLACE INTO monitor_state VALUES('last_retention_run',?)", (str(stamp),))
+            con.execute("INSERT OR REPLACE INTO monitor_state VALUES('last_retention_result',?)",
+                        (json.dumps(result, separators=(",", ":")),))
+        after_size = Path(target).stat().st_size if Path(target).exists() else before_size
+        result["bytes_after"] = after_size
+        result["bytes_reclaimed"] = max(0, before_size - after_size)
+        print("retention end " + json.dumps(result, separators=(",", ":")), flush=True)
+        return result
+    except Exception as exc:
+        print(f"retention failed database={Path(target).name} error={type(exc).__name__}", flush=True)
+        raise
+
+
+def retention_scheduler():
+    """Run once daily; first run waits a full interval to avoid surprise startup deletion."""
+    while True:
+        time.sleep(RETENTION_INTERVAL_SECONDS)
+        try:
+            paths = ([catalog.database(item["id"]) for item in catalog.public()["generations"]]
+                     if catalog else [DB_PATH])
+            for path in paths:
+                run_retention(path)
+        except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+            print("retention scheduler failed:", type(exc).__name__, flush=True)
 
 
 def merge_intervals(intervals, start, end):
@@ -645,21 +791,48 @@ def get_sample_window(start, end):
 
 
 def chart_history(start, end, bucket):
-    """Return timestamped aggregates and explicit gaps without turning low values into gaps."""
+    """Blend daily, hourly and raw tiers without crossing retention boundaries."""
+    metrics = ("hashrate", "power", "temp", "voltage", "vr_temp", "core_voltage",
+               "frequency", "fan_rpm", "response_ms")
+    buckets = {}
+
+    def add(stamp, metric, value, count=1, rank=1):
+        if value is None:
+            return
+        target = int(stamp) // bucket * bucket
+        item = buckets.setdefault(target, {})
+        if rank > item.get("_rank", 0):
+            item.clear()
+            item["_rank"] = rank
+        elif rank < item.get("_rank", 0):
+            return
+        total, prior_count = item.get(metric, (0.0, 0))
+        item[metric] = (total + float(value) * count, prior_count + count)
+
     with db() as con:
-        rows = con.execute("""SELECT CAST(AVG(ts) AS INTEGER) ts,
-            AVG(hashrate) hashrate,AVG(power) power,AVG(temp) temp,
-            AVG(voltage)/1000.0 voltage,AVG(vr_temp) vr_temp,
-            AVG(core_voltage) core_voltage,AVG(frequency) frequency,
-            AVG(fan_rpm) fan_rpm,AVG(response_ms) response_ms,
-            MAX(accepted) accepted,MAX(rejected) rejected
-            FROM samples WHERE ts BETWEEN ? AND ? GROUP BY CAST(ts/? AS INTEGER) ORDER BY ts""",
-            (start, end, bucket)).fetchall()
+        for period, rank in (("day", 1), ("hour", 2)):
+            rows = con.execute("""SELECT period_start,metric,avg_value,sample_count
+                FROM telemetry_aggregates WHERE period=? AND period_start>=? AND period_start<?""",
+                               (period, start - 86400, end)).fetchall()
+            width = 86400 if period == "day" else 3600
+            for row in rows:
+                stamp = row["period_start"] + width // 2
+                if start <= stamp <= end and row["metric"] in metrics:
+                    add(stamp, row["metric"], row["avg_value"], row["sample_count"], rank)
+        raw_rows = con.execute("""SELECT ts,hashrate,power,temp,voltage,vr_temp,
+            core_voltage,frequency,fan_rpm,response_ms FROM samples
+            WHERE ts BETWEEN ? AND ? ORDER BY ts""", (start, end)).fetchall()
+        for row in raw_rows:
+            for metric in metrics:
+                add(row["ts"], metric, row[metric], rank=3)
     result = []
     gap_after = max(POLL_SECONDS * 3, int(bucket * 2.5))
     previous_ts = None
-    for row in rows:
-        item = dict(row)
+    for stamp in sorted(buckets):
+        item = {"ts": stamp, **{metric: pair[0] / pair[1] for metric, pair
+                                in buckets[stamp].items() if metric != "_rank"}}
+        if item.get("voltage") is not None:
+            item["voltage"] /= 1000.0
         if previous_ts is not None and item["ts"] - previous_ts > gap_after:
             result.append({"ts": previous_ts + 1, "gap": True})
             result.append({"ts": item["ts"] - 1, "gap": True})
@@ -675,7 +848,7 @@ def chart_markers(start, end):
         events = con.execute("""SELECT id,ts,NULL ended_at,kind,message description,automatic
             FROM events WHERE ts BETWEEN ? AND ? AND kind IN
             ('ASIC_DOMAIN_STALL_DETECTED','HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
-             'OFFLINE','REBOOT','RECOVERED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
+             'OFFLINE','REBOOT','RECOVERED','ONLINE_RESTORED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
             (start, end)).fetchall()
         pauses = planned_pause_intervals(con, start, end)
     pause_markers = [{"id": None, "ts": left, "ended_at": right, "kind": "USER_PAUSED",
@@ -1332,6 +1505,28 @@ def offline_event_context():
                         else "Bitaxe seit mehreren Polls nicht erreichbar")}
 
 
+def online_restored_details(before, current, offline_since, restored_at):
+    before_uptime = before.get("uptimeSeconds") if before else None
+    current_uptime = current.get("uptimeSeconds")
+    reset = (isinstance(before_uptime, (int, float)) and isinstance(current_uptime, (int, float))
+             and current_uptime + 30 < before_uptime)
+    classification = "POSSIBLE_DEVICE_REBOOT_OR_POWER_CYCLE" if reset else "LIKELY_NETWORK_OR_API_OUTAGE"
+    return {"outage_started_at": offline_since, "restored_at": restored_at,
+            "duration_seconds": max(0, restored_at - offline_since),
+            "uptime_before": before_uptime, "uptime_after": current_uptime,
+            "uptime_reset": reset, "classification": classification}
+
+
+def record_online_restored(before, current, offline_since, restored_at, incident_id=None):
+    details = online_restored_details(before, current, offline_since, restored_at)
+    label = ("möglicher Geräte-Neustart/Power-Cycle" if details["uptime_reset"]
+             else "wahrscheinlicher Netzwerk-/API-Ausfall")
+    add_event("ONLINE_RESTORED", "warning" if details["uptime_reset"] else "info",
+              f"Bitaxe nach {details['duration_seconds']} Sekunden wieder erreichbar · {label}",
+              restored_at, incident_id=incident_id, details=details)
+    return details
+
+
 def auto_restart_enabled():
     if catalog and (not catalog.get()['fingerprint'] or database_path() != catalog.database()):
         return False
@@ -1459,6 +1654,8 @@ def poll_generation():
     incident_before = None
     incident_during = None
     offline_since = None
+    restored_details = None
+    outage_classification = None
     degraded_since = None
     degradation_baseline = None
     degradation_values = []
@@ -1524,6 +1721,10 @@ def poll_generation():
                 successes += 1
                 pause_now = bool(data.get("miningPaused"))
                 pause_guard = pause_now or user_pause_grace_active(stamp)
+                restored_details = None
+                if previous_failures >= OFFLINE_AFTER_POLLS and offline_since is not None:
+                    restored_details = record_online_restored(old, data, offline_since, stamp, incident_id)
+                    outage_classification = restored_details
                 if previous_failures >= OFFLINE_AFTER_POLLS and was_user_paused:
                     add_event("RECOVERED", "info", "Bitaxe nach Benutzerpause wieder erreichbar", stamp,
                               details={"after_user_pause": True})
@@ -1753,8 +1954,15 @@ def poll_generation():
                     attach_incident_sample(incident_id, stamp, "during", data)
                     offline_duration = 0 if offline_since is None else stamp - offline_since
                     kind, reason = classify_incident(incident_before, incident_during or data, data if rebooted else {}, offline_duration)
+                    if outage_classification:
+                        if outage_classification["uptime_reset"]:
+                            kind, reason = "REBOOT", "Gerät nach Ausfall mit zurückgesetzter Uptime wieder erreichbar; möglicher Reboot/Power-Cycle"
+                        else:
+                            kind, reason = "NETWORK_OR_API_OUTAGE", "Gerät bei fortlaufender Uptime wieder erreichbar; wahrscheinlicher Netzwerk-/API-Ausfall"
                     facts = {"controller_reachable": True, "uptime_reset": rebooted,
                              "offline_seconds": offline_duration, "reset_reason": data.get("resetReason") if rebooted else None}
+                    if outage_classification:
+                        facts["outage"] = outage_classification
                     update_incident(incident_id, kind=kind, title=kind.replace("_", " "),
                                     summary=reason or "Ursache nicht eindeutig", observed_cause=fact, facts=facts)
                     if not stopped and successes >= RECOVERY_POLLS:
@@ -1763,6 +1971,7 @@ def poll_generation():
                                         after_sample=safe_payload(data), severity="warning")
                         add_event("RECOVERED", "info", recovery)
                         incident_id = incident_start = incident_before = incident_during = offline_since = None
+                        outage_classification = None
                 if pause_now:
                     state = "USER PAUSED"
                 elif state in {"OFFLINE", "RECOVERING", "USER PAUSED"}:
@@ -1830,7 +2039,23 @@ def initialize_storage():
             backup(original, destination)
     catalog = Catalog(DB_PATH)
     catalog.finish_operations()
-    initialize_database(catalog.database())
+    generation_paths = [(item['id'], catalog.database(item['id'])) for item in catalog.public()['generations']]
+    needs_v5 = []
+    for generation, path in generation_paths:
+        if not Path(path).exists():
+            continue
+        with connection(path) as con:
+            has_migrations = con.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone()
+            ready = has_migrations and con.execute('SELECT 1 FROM schema_migrations WHERE version=5').fetchone()
+        if not ready:
+            needs_v5.append((generation, path))
+    if needs_v5:
+        backup_dir = original.parent / 'backups' / ('migration-v5-' + str(now()) + '-' + uuid.uuid4().hex[:8])
+        for generation, path in needs_v5:
+            backup(path, backup_dir / (generation + '.sqlite3'))
+        backup(catalog.path, backup_dir / 'generations.sqlite3')
+    for _, path in generation_paths:
+        initialize_database(path)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1881,12 +2106,23 @@ class Handler(BaseHTTPRequestHandler):
         if p.path == '/api/storage':
             with db() as con:
                 pages = con.execute('PRAGMA page_count').fetchone()[0]
+                free_pages = con.execute('PRAGMA freelist_count').fetchone()[0]
                 size = con.execute('PRAGMA page_size').fetchone()[0]
                 count = con.execute('SELECT COUNT(*) FROM samples').fetchone()[0]
                 first = con.execute('SELECT MIN(ts) FROM samples').fetchone()[0]
                 sessions = con.execute('SELECT COUNT(*) FROM boot_sessions').fetchone()[0]
-            return self.send_json({'bytes': pages * size, 'samples': count, 'started_at': first,
-                                   'boot_sessions': sessions, 'retention': 'Keine automatische Löschung'})
+                hourly = con.execute("SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates WHERE period='hour'").fetchone()[0]
+                daily = con.execute("SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates WHERE period='day'").fetchone()[0]
+                last_retention = con.execute("SELECT value FROM monitor_state WHERE key='last_retention_run'").fetchone()
+            path = Path(database_path())
+            files = [path, Path(str(path) + '-wal'), Path(str(path) + '-shm')]
+            return self.send_json({'bytes': sum(item.stat().st_size for item in files if item.exists()),
+                                   'database_bytes': pages * size, 'free_bytes': free_pages * size,
+                                   'samples': count, 'started_at': first, 'hourly_periods': hourly,
+                                   'daily_periods': daily, 'last_retention_at': int(last_retention[0]) if last_retention else None,
+                                   'boot_sessions': sessions, 'raw_retention_days': RAW_RETENTION_DAYS,
+                                   'hourly_retention_days': HOURLY_RETENTION_DAYS,
+                                   'daily_retention_days': None})
         if p.path == "/":
             body = HTML.encode()
             self.send_response(200)
@@ -2140,5 +2376,6 @@ if __name__ == "__main__":
     initialize_storage()
     backfill_historical_incidents()
     threading.Thread(target=poller, daemon=True).start()
+    threading.Thread(target=retention_scheduler, daemon=True).start()
     threading.Thread(target=market_poller, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

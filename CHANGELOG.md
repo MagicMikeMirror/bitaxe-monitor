@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0
+
+- Retain full raw telemetry for 30 days, hourly aggregates for 365 days and daily aggregates indefinitely, independently per device generation.
+- Create and verify aggregates in the same transaction before deleting their source tier; failed runs retain all source data.
+- Blend raw, hourly and daily data automatically in chart queries without artificial retention gaps.
+- Add compact retention status, oldest raw point, aggregate counts, database/WAL size and last-run time to the dashboard API.
+- Persist `ONLINE_RESTORED` with outage duration and uptime-based network/API versus possible reboot classification.
+- Back up every affected generation database before the additive schema-v5 migration.
+
 ## 1.3.7
 
 - Fix the historical user-pause confirmation endpoint startup dependency.
