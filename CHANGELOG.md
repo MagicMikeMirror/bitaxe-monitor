@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.6.1
+
+- Idempotently link legacy uptime-confirmed `REBOOT` events to reconstructed `DEVICE_REBOOT` incidents so existing active-generation reboot history appears in the new statistics without changing telemetry.
+
+## 1.6.0
+
+- Record every uptime-confirmed reboot as a separate `DEVICE_REBOOT` incident with the raw AxeOS `resetReason`, evidence source and confidence.
+- Treat API text such as `Software reset due to exception/panic` as reported, never as an independently confirmed panic.
+- Correlate the five minutes before and after a reboot without claiming causation and keep network/API failures separate from ASIC faults.
+- Add reboot statistics plus independent ASIC and system/firmware stability ratings to the dashboard and `/api/stability`.
+
+## 1.5.1
+
+- Retry Public Pool polling at the telemetry interval until AxeOS has supplied the miner address after container startup.
+
+## 1.5.0
+
+- Retain full raw telemetry for 30 days, hourly aggregates for 365 days and daily aggregates indefinitely, independently per device generation.
+- Create and verify aggregates in the same transaction before deleting their source tier; failed runs retain all source data.
+- Blend raw, hourly and daily data automatically in chart queries without artificial retention gaps.
+- Add compact retention status, oldest raw point, aggregate counts, database/WAL size and last-run time to the dashboard API.
+- Persist `ONLINE_RESTORED` with outage duration and uptime-based network/API versus possible reboot classification.
+- Back up every affected generation database before the additive schema-v5 migration.
+
 ## 1.3.7
 
 - Fix the historical user-pause confirmation endpoint startup dependency.

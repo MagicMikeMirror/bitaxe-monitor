@@ -57,7 +57,7 @@ class TimeWeightedHashrateTests(unittest.TestCase):
                 self.assertLess(summary["avg_24h"], 1200)
                 self.assertGreater(summary["avg_7d"], 1000)
                 self.assertLess(summary["avg_7d"], 1200)
-                self.assertTrue(any(marker["kind"] == "REBOOT" and marker["ts"] == restart_at
+                self.assertTrue(any(marker["kind"] == "DEVICE_REBOOT" and marker["ts"] == restart_at
                                     for marker in markers))
             finally:
                 APP.DB_PATH, APP.POLL_SECONDS, APP.now = original_path, original_poll, original_now

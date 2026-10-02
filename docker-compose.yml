@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.4.2
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.6.1
     build: .
     container_name: bitaxe-monitor
     restart: unless-stopped
@@ -10,6 +10,9 @@ services:
       BITAXE_API_URL: ${BITAXE_API_URL:-http://192.168.1.100/api/system/info}
       DB_PATH: /data/bitaxe.sqlite3
       POLL_SECONDS: ${POLL_SECONDS:-10}
+      RAW_RETENTION_DAYS: ${RAW_RETENTION_DAYS:-30}
+      HOURLY_RETENTION_DAYS: ${HOURLY_RETENTION_DAYS:-365}
+      RETENTION_INTERVAL_SECONDS: ${RETENTION_INTERVAL_SECONDS:-86400}
       PORT: "8080"
       PUBLIC_POOL_API_URL: ${PUBLIC_POOL_API_URL:-https://public-pool.io:40557/api}
       BTC_PRICE_URL: ${BTC_PRICE_URL:-https://api.coinbase.com/v2/prices/BTC-EUR/spot}
@@ -60,12 +63,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.4.0"
-  update_at: "2026-09-25"
+  version: "1.6.1"
+  update_at: "2026-10-02"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Isolated device generations, verified backups, reset-aware diagnostics and a unified incident timeline.
-    de_DE: Getrennte Gerätehistorien, geprüfte Sicherungen, resetfeste Diagnostik und gemeinsame Ereignis-Zeitachse.
+    en_US: Evidence-based reboot diagnostics with confidence levels, temporal correlations and separate ASIC/system stability.
+    de_DE: Evidenzbasierte Neustartdiagnose mit Vertrauensstufen, zeitlichen Korrelationen und getrennter ASIC-/Systemstabilität.

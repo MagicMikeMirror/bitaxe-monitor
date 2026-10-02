@@ -22,6 +22,9 @@ API_URL = os.getenv("BITAXE_API_URL", "http://192.168.1.100/api/system/info")
 DB_PATH = os.getenv("DB_PATH", "/data/bitaxe.sqlite3")
 POLL_SECONDS = max(5, int(os.getenv("POLL_SECONDS", "10")))
 PORT = int(os.getenv("PORT", "8080"))
+RAW_RETENTION_DAYS = max(1, int(os.getenv("RAW_RETENTION_DAYS", "30")))
+HOURLY_RETENTION_DAYS = max(RAW_RETENTION_DAYS + 1, int(os.getenv("HOURLY_RETENTION_DAYS", "365")))
+RETENTION_INTERVAL_SECONDS = max(3600, int(os.getenv("RETENTION_INTERVAL_SECONDS", "86400")))
 POWER_HIGH = float(os.getenv("POWER_HIGH_W", "35"))
 TEMP_HIGH = float(os.getenv("TEMP_HIGH_C", "75"))
 HASHRATE_LOW = float(os.getenv("HASHRATE_LOW_GH", "750"))
@@ -87,7 +90,8 @@ ALLOWED = (
 INCIDENT_KINDS = {
     "POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
     "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE",
-    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "REGULATOR_FAULT", "WATCHDOG_RESET", "SYSTEM_RESET", "UNKNOWN"
+    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "REGULATOR_FAULT", "WATCHDOG_RESET",
+    "DEVICE_REBOOT", "SYSTEM_RESET", "UNKNOWN"
 }
 
 LAYOUT_WIDGETS = (
@@ -238,6 +242,19 @@ def migrate_schema(con):
         con.execute('ALTER TABLE samples_v4 RENAME TO samples')
         con.execute('CREATE INDEX idx_samples_ts ON samples(ts)')
         con.execute('INSERT INTO schema_migrations VALUES(4,?)', (now(),))
+    if 5 not in applied:
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS telemetry_aggregates(
+          period TEXT NOT NULL CHECK(period IN ('hour','day')),
+          period_start INTEGER NOT NULL, metric TEXT NOT NULL,
+          min_value REAL, max_value REAL, avg_value REAL,
+          sample_count INTEGER NOT NULL, sum_value REAL,
+          PRIMARY KEY(period,period_start,metric)
+        );
+        CREATE INDEX IF NOT EXISTS idx_telemetry_aggregates_range
+          ON telemetry_aggregates(period,period_start);
+        """)
+        con.execute('INSERT INTO schema_migrations VALUES(5,?)', (now(),))
 
 
 def init_db():
@@ -284,6 +301,137 @@ def init_db():
         con.execute('''CREATE TABLE IF NOT EXISTS counter_epochs(
             id TEXT PRIMARY KEY, boot_id TEXT NOT NULL REFERENCES boot_sessions(id),
             started_at INTEGER NOT NULL, reason TEXT NOT NULL)''')
+    backfill_legacy_reboots()
+
+
+AGGREGATE_COLUMNS = {
+    "hashrate": "hashrate", "power": "power", "voltage": "voltage",
+    "temp": "temp", "vr_temp": "vr_temp", "fan_rpm": "fan_rpm",
+    "core_voltage": "core_voltage", "frequency": "frequency",
+    "error_pct": "error_pct", "response_ms": "response_ms",
+}
+
+
+def _aggregate(values):
+    values = [float(value) for value in values if isinstance(value, (int, float))]
+    if not values:
+        return None
+    return min(values), max(values), sum(values) / len(values), len(values), sum(values)
+
+
+def _accumulate(groups, key, value, count=1, total=None, minimum=None, maximum=None):
+    if not isinstance(value, (int, float)) or count <= 0:
+        return
+    total = float(value) * count if total is None else float(total)
+    minimum = float(value) if minimum is None else float(minimum)
+    maximum = float(value) if maximum is None else float(maximum)
+    prior = groups.get(key)
+    if prior:
+        groups[key] = (min(prior[0], minimum), max(prior[1], maximum),
+                       prior[2] + total, prior[3] + count)
+    else:
+        groups[key] = (minimum, maximum, total, count)
+
+
+def _finish_accumulator(value):
+    minimum, maximum, total, count = value
+    return minimum, maximum, total / count, count, total
+
+
+def _raw_metrics(row):
+    result = {"_samples": 1, **{metric: row[column] for metric, column in AGGREGATE_COLUMNS.items()}}
+    payload = json.loads(row["payload"] or "{}")
+    accepted, rejected = payload.get("sharesAccepted"), payload.get("sharesRejected")
+    if isinstance(accepted, (int, float)) and isinstance(rejected, (int, float)) and accepted + rejected:
+        result["reject_rate"] = rejected * 100.0 / (accepted + rejected)
+    domains = (((payload.get("hashrateMonitor") or {}).get("asics") or [{}])[0].get("domains") or [])
+    for index, value in enumerate(domains[:4]):
+        result[f"domain_{index + 1}"] = value
+    return result
+
+
+def _store_aggregate(con, period, period_start, metric, aggregate):
+    con.execute("""INSERT OR REPLACE INTO telemetry_aggregates
+        (period,period_start,metric,min_value,max_value,avg_value,sample_count,sum_value)
+        VALUES(?,?,?,?,?,?,?,?)""", (period, period_start, metric, *aggregate))
+
+
+def run_retention(path=None, stamp=None, fail_after_aggregation=False):
+    """Roll raw -> hourly -> daily atomically for one generation database."""
+    stamp = int(stamp or now())
+    raw_cutoff = ((stamp - RAW_RETENTION_DAYS * 86400) // 3600) * 3600
+    hourly_cutoff = ((stamp - HOURLY_RETENTION_DAYS * 86400) // 86400) * 86400
+    target = path or database_path()
+    before_size = Path(target).stat().st_size if Path(target).exists() else 0
+    result = {"hourly_periods": 0, "daily_periods": 0, "raw_deleted": 0,
+              "hourly_deleted": 0, "bytes_before": before_size, "started_at": stamp}
+    print(f"retention start database={Path(target).name}", flush=True)
+    try:
+        with connection(target) as con:
+            raw_rows = con.execute("""SELECT * FROM samples WHERE ts<?
+                ORDER BY ts,id""", (raw_cutoff,)).fetchall()
+            hourly = {}
+            for row in raw_rows:
+                period_start = row["ts"] // 3600 * 3600
+                for metric, value in _raw_metrics(row).items():
+                    _accumulate(hourly, (period_start, metric), value)
+            for (period_start, metric), values in hourly.items():
+                _store_aggregate(con, "hour", period_start, metric, _finish_accumulator(values))
+            result["hourly_periods"] = len({key[0] for key in hourly})
+
+            hour_rows = con.execute("""SELECT * FROM telemetry_aggregates
+                WHERE period='hour' AND period_start<? ORDER BY period_start,metric""",
+                                    (hourly_cutoff,)).fetchall()
+            daily = {}
+            for row in hour_rows:
+                day = row["period_start"] // 86400 * 86400
+                _accumulate(daily, (day, row["metric"]), row["avg_value"], row["sample_count"],
+                            row["sum_value"], row["min_value"], row["max_value"])
+            for (period_start, metric), values in daily.items():
+                _store_aggregate(con, "day", period_start, metric, _finish_accumulator(values))
+            result["daily_periods"] = len({key[0] for key in daily})
+            if fail_after_aggregation:
+                raise RuntimeError("simulated retention failure")
+
+            if raw_rows:
+                expected = len({row["ts"] // 3600 * 3600 for row in raw_rows})
+                stored = con.execute("""SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates
+                    WHERE period='hour' AND period_start<? AND metric='_samples'""", (raw_cutoff,)).fetchone()[0]
+                if stored < expected:
+                    raise RuntimeError("hourly aggregate verification failed")
+                result["raw_deleted"] = con.execute("DELETE FROM samples WHERE ts<?", (raw_cutoff,)).rowcount
+            if hour_rows:
+                expected = len({row["period_start"] // 86400 * 86400 for row in hour_rows})
+                stored = con.execute("""SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates
+                    WHERE period='day' AND period_start<? AND metric='_samples'""", (hourly_cutoff,)).fetchone()[0]
+                if stored < expected:
+                    raise RuntimeError("daily aggregate verification failed")
+                result["hourly_deleted"] = con.execute("""DELETE FROM telemetry_aggregates
+                    WHERE period='hour' AND period_start<?""", (hourly_cutoff,)).rowcount
+            con.execute("INSERT OR REPLACE INTO monitor_state VALUES('last_retention_run',?)", (str(stamp),))
+            con.execute("INSERT OR REPLACE INTO monitor_state VALUES('last_retention_result',?)",
+                        (json.dumps(result, separators=(",", ":")),))
+        after_size = Path(target).stat().st_size if Path(target).exists() else before_size
+        result["bytes_after"] = after_size
+        result["bytes_reclaimed"] = max(0, before_size - after_size)
+        print("retention end " + json.dumps(result, separators=(",", ":")), flush=True)
+        return result
+    except Exception as exc:
+        print(f"retention failed database={Path(target).name} error={type(exc).__name__}", flush=True)
+        raise
+
+
+def retention_scheduler():
+    """Run once daily; first run waits a full interval to avoid surprise startup deletion."""
+    while True:
+        time.sleep(RETENTION_INTERVAL_SECONDS)
+        try:
+            paths = ([catalog.database(item["id"]) for item in catalog.public()["generations"]]
+                     if catalog else [DB_PATH])
+            for path in paths:
+                run_retention(path)
+        except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+            print("retention scheduler failed:", type(exc).__name__, flush=True)
 
 
 def merge_intervals(intervals, start, end):
@@ -646,21 +794,48 @@ def get_sample_window(start, end):
 
 
 def chart_history(start, end, bucket):
-    """Return timestamped aggregates and explicit gaps without turning low values into gaps."""
+    """Blend daily, hourly and raw tiers without crossing retention boundaries."""
+    metrics = ("hashrate", "power", "temp", "voltage", "vr_temp", "core_voltage",
+               "frequency", "fan_rpm", "response_ms")
+    buckets = {}
+
+    def add(stamp, metric, value, count=1, rank=1):
+        if value is None:
+            return
+        target = int(stamp) // bucket * bucket
+        item = buckets.setdefault(target, {})
+        if rank > item.get("_rank", 0):
+            item.clear()
+            item["_rank"] = rank
+        elif rank < item.get("_rank", 0):
+            return
+        total, prior_count = item.get(metric, (0.0, 0))
+        item[metric] = (total + float(value) * count, prior_count + count)
+
     with db() as con:
-        rows = con.execute("""SELECT CAST(AVG(ts) AS INTEGER) ts,
-            AVG(hashrate) hashrate,AVG(power) power,AVG(temp) temp,
-            AVG(voltage)/1000.0 voltage,AVG(vr_temp) vr_temp,
-            AVG(core_voltage) core_voltage,AVG(frequency) frequency,
-            AVG(fan_rpm) fan_rpm,AVG(response_ms) response_ms,
-            MAX(accepted) accepted,MAX(rejected) rejected
-            FROM samples WHERE ts BETWEEN ? AND ? GROUP BY CAST(ts/? AS INTEGER) ORDER BY ts""",
-            (start, end, bucket)).fetchall()
+        for period, rank in (("day", 1), ("hour", 2)):
+            rows = con.execute("""SELECT period_start,metric,avg_value,sample_count
+                FROM telemetry_aggregates WHERE period=? AND period_start>=? AND period_start<?""",
+                               (period, start - 86400, end)).fetchall()
+            width = 86400 if period == "day" else 3600
+            for row in rows:
+                stamp = row["period_start"] + width // 2
+                if start <= stamp <= end and row["metric"] in metrics:
+                    add(stamp, row["metric"], row["avg_value"], row["sample_count"], rank)
+        raw_rows = con.execute("""SELECT ts,hashrate,power,temp,voltage,vr_temp,
+            core_voltage,frequency,fan_rpm,response_ms FROM samples
+            WHERE ts BETWEEN ? AND ? ORDER BY ts""", (start, end)).fetchall()
+        for row in raw_rows:
+            for metric in metrics:
+                add(row["ts"], metric, row[metric], rank=3)
     result = []
     gap_after = max(POLL_SECONDS * 3, int(bucket * 2.5))
     previous_ts = None
-    for row in rows:
-        item = dict(row)
+    for stamp in sorted(buckets):
+        item = {"ts": stamp, **{metric: pair[0] / pair[1] for metric, pair
+                                in buckets[stamp].items() if metric != "_rank"}}
+        if item.get("voltage") is not None:
+            item["voltage"] /= 1000.0
         if previous_ts is not None and item["ts"] - previous_ts > gap_after:
             result.append({"ts": previous_ts + 1, "gap": True})
             result.append({"ts": item["ts"] - 1, "gap": True})
@@ -676,7 +851,7 @@ def chart_markers(start, end):
         events = con.execute("""SELECT id,ts,NULL ended_at,kind,message description,automatic
             FROM events WHERE ts BETWEEN ? AND ? AND kind IN
             ('ASIC_DOMAIN_STALL_DETECTED','HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
-             'OFFLINE','REBOOT','RECOVERED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
+             'OFFLINE','REBOOT','DEVICE_REBOOT','RECOVERED','ONLINE_RESTORED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
             (start, end)).fetchall()
         pauses = planned_pause_intervals(con, start, end)
     pause_markers = [{"id": None, "ts": left, "ended_at": right, "kind": "USER_PAUSED",
@@ -1098,6 +1273,172 @@ def observed_cause(data):
     return None
 
 
+def reboot_detected(before, after):
+    """A reset reason is not evidence of a new reboot; the uptime discontinuity is."""
+    before_uptime = (before or {}).get("uptimeSeconds")
+    after_uptime = (after or {}).get("uptimeSeconds")
+    return (isinstance(before_uptime, (int, float))
+            and isinstance(after_uptime, (int, float))
+            and after_uptime + 30 < before_uptime)
+
+
+def reset_reason_evidence(reported_reason=None, log_evidence=None):
+    """Normalize reset evidence without promoting an API claim to confirmed fact."""
+    reported = str(reported_reason or "").strip() or None
+    evidence = str(log_evidence or "").strip() or None
+    text = (evidence or reported or "").lower()
+    source = "LOG" if evidence else ("API" if reported else "UNKNOWN")
+    confidence = "CONFIRMED" if evidence else ("REPORTED" if reported else "UNKNOWN")
+    if any(token in text for token in ("esp_rst_brownout", "brownout")):
+        category = "BROWNOUT"
+    elif "esp_rst_task_wdt" in text or "task watchdog" in text:
+        category = "TASK_WATCHDOG"
+    elif "esp_rst_int_wdt" in text or "interrupt watchdog" in text:
+        category = "INTERRUPT_WATCHDOG"
+    elif "esp_rst_wdt" in text or "watchdog" in text:
+        category = "WATCHDOG"
+    elif ("esp_rst_panic" in text or "guru meditation" in text
+          or (evidence and "panic" in text)
+          or (evidence and "exception" in text and any(token in text for token in ("backtrace", "abort", "crash")))):
+        category = "PANIC"
+    elif "panic" in text or "exception" in text:
+        category = "PANIC"
+        confidence = "REPORTED" if reported else "INFERRED"
+        source = "API" if reported else "INFERRED"
+    elif any(token in text for token in ("esp_rst_poweron", "power-on", "power on")):
+        category = "POWER_ON_RESET"
+    elif any(token in text for token in ("esp_rst_ext", "external reset")):
+        category = "EXTERNAL_RESET"
+    elif any(token in text for token in ("manual restart", "user restart")):
+        category = "MANUAL_RESTART"
+    elif any(token in text for token in ("esp_rst_sw", "software reset", "esp_restart")):
+        category = "SOFTWARE_RESET"
+    else:
+        category = "UNKNOWN"
+        if not reported and not evidence:
+            source, confidence = "UNKNOWN", "UNKNOWN"
+    return {"category": category, "reported_reset_reason": reported,
+            "reset_reason_source": source, "reset_reason_confidence": confidence,
+            "log_evidence": evidence}
+
+
+def reboot_correlations(started_at, before, after):
+    """Return temporal correlations only; none of these flags asserts causation."""
+    samples = get_sample_window(int(started_at) - 300, int(started_at) - 1)
+    with db() as con:
+        events = con.execute("SELECT ts,kind FROM events WHERE ts BETWEEN ? AND ? ORDER BY ts",
+                             (int(started_at) - 300, int(started_at) - 1)).fetchall()
+    flags, observations = [], []
+
+    def note(flag, label, timestamp):
+        if flag in flags:
+            return
+        flags.append(flag)
+        seconds = max(0, int(started_at) - int(timestamp))
+        observations.append({"flag": flag, "seconds_before_reboot": seconds,
+                             "message": f"{label} {seconds} Sekunden vor dem Neustart beobachtet"})
+
+    for event in events:
+        if event["kind"] in {"OFFLINE", "NETWORK_OR_API_OUTAGE"}:
+            note("REBOOT_AFTER_NETWORK_FAILURE", "Netzwerk-/API-Ausfall", event["ts"])
+        if event["kind"] == "POOL_OR_STRATUM_ISSUE":
+            note("REBOOT_AFTER_POOL_FAILURE", "Pool-/Stratum-Störung", event["ts"])
+        if event["kind"] in {"HASHRATE_DROP_DETECTED", "ASIC_DOMAIN_STALL_DETECTED"}:
+            note("REBOOT_AFTER_HASHRATE_DROP", "Hashrate-Einbruch", event["ts"])
+    for sample in samples:
+        if sample.get("isUsingFallbackStratum"):
+            note("REBOOT_AFTER_FALLBACK_SWITCH", "Fallback-Pool", sample["ts"])
+        voltage = number(sample.get("voltage"))
+        if voltage is not None and voltage < VOLTAGE_LOW_V * 1000:
+            note("REBOOT_AFTER_VIN_ANOMALY", "VIN-Anomalie", sample["ts"])
+    last = before or (samples[-1] if samples else {})
+    expected = number(last.get("expectedHashrate")) or number(last.get("hashRate_1h"))
+    observed = number(last.get("hashRate"))
+    if expected and observed is not None and observed < expected * (1 - AUTO_RESTART_LOSS):
+        note("REBOOT_AFTER_HASHRATE_DROP", "Hashrate-Einbruch", last.get("ts", started_at))
+    if not flags:
+        flags.append("REBOOT_WITHOUT_PRECURSOR")
+        observations.append({"flag": flags[0], "seconds_before_reboot": None,
+                             "message": "Kein definierter Vorläufer im 5-Minuten-Fenster beobachtet"})
+    return {"flags": flags, "observations": observations,
+            "window_seconds": 300, "causation_claimed": False}
+
+
+def record_device_reboot(before, after, stamp, log_evidence=None):
+    evidence = reset_reason_evidence(after.get("resetReason"), log_evidence)
+    correlations = reboot_correlations(stamp, before, after)
+    last_before, _ = pre_crash_snapshot(stamp)
+    first_after = safe_payload(after) | {"ts": int(stamp)}
+    facts = {"reboot_detected": True, **evidence,
+             "previous_uptime_seconds": before.get("uptimeSeconds"),
+             "new_uptime_seconds": after.get("uptimeSeconds"),
+             "last_successful_sample_before": last_before or safe_payload(before),
+             "first_successful_sample_after": first_after,
+             "correlations": correlations,
+             "diagnostic_window": {"before_seconds": 300, "after_seconds": 300}}
+    category = evidence["category"]
+    summary = ("Neustart erkannt; Ursache unbekannt" if category == "UNKNOWN" else
+               f"Neustart erkannt; gemeldete Reset-Kategorie {category}")
+    incident_id = create_incident(stamp, "DEVICE_REBOOT", "DEVICE REBOOT", summary,
+                                  "warning", facts=facts, before_override=before)
+    attach_incident_sample(incident_id, stamp, "first_after_reboot", after)
+    update_incident(incident_id, ended_at=stamp, status="RESOLVED",
+                    recovery="AxeOS/API nach Neustart erreichbar",
+                    after_sample=safe_payload(after), facts=facts)
+    add_event("DEVICE_REBOOT", "warning", summary, stamp, incident_id=incident_id,
+              details={"reported_reset_reason": evidence["reported_reset_reason"],
+                       "reset_reason_source": evidence["reset_reason_source"],
+                       "reset_reason_confidence": evidence["reset_reason_confidence"],
+                       "category": category, "correlations": correlations["flags"]})
+    return incident_id
+
+
+def backfill_legacy_reboots():
+    """Turn reliable legacy uptime-reset events into auditable reboot incidents once."""
+    with db() as con:
+        rows = con.execute("""SELECT id,ts,message FROM events
+            WHERE kind='REBOOT' AND incident_id IS NULL ORDER BY ts""").fetchall()
+    for event in rows:
+        with db() as con:
+            before_row = con.execute("SELECT ts,payload FROM samples WHERE ts<? ORDER BY ts DESC LIMIT 1",
+                                     (event["ts"],)).fetchone()
+            after_row = con.execute("SELECT ts,payload FROM samples WHERE ts>=? ORDER BY ts LIMIT 1",
+                                    (event["ts"],)).fetchone()
+        before = (safe_payload(json.loads(before_row["payload"])) | {"ts": before_row["ts"]}) if before_row else {}
+        after = (safe_payload(json.loads(after_row["payload"])) | {"ts": after_row["ts"]}) if after_row else {}
+        reported = after.get("resetReason")
+        if not reported and ":" in event["message"]:
+            reported = event["message"].split(":", 1)[1].strip() or None
+        evidence = reset_reason_evidence(reported)
+        correlations = reboot_correlations(event["ts"], before, after)
+        facts = {"reboot_detected": True, **evidence,
+                 "previous_uptime_seconds": before.get("uptimeSeconds"),
+                 "new_uptime_seconds": after.get("uptimeSeconds"),
+                 "last_successful_sample_before": before or None,
+                 "first_successful_sample_after": after or None,
+                 "correlations": correlations,
+                 "diagnostic_window": {"before_seconds": 300, "after_seconds": 300},
+                 "historical_reconstruction": True,
+                 "legacy_event_id": event["id"]}
+        category = evidence["category"]
+        summary = ("Historischer Neustart erkannt; Ursache unbekannt" if category == "UNKNOWN" else
+                   f"Historischer Neustart; gemeldete Reset-Kategorie {category}")
+        incident_id = create_incident(event["ts"], "DEVICE_REBOOT", "DEVICE REBOOT", summary,
+                                      "warning", facts=facts, before_override=before or None)
+        if after:
+            attach_incident_sample(incident_id, after["ts"], "first_after_reboot", after)
+        update_incident(incident_id, ended_at=event["ts"], status="RESOLVED",
+                        recovery="Historisches Reboot-Ereignis rekonstruiert",
+                        after_sample=after or None, facts=facts)
+        with db() as con:
+            con.execute("""UPDATE events SET kind='DEVICE_REBOOT',incident_id=?,details=? WHERE id=?""",
+                        (incident_id, json.dumps({"historical_reconstruction": True,
+                         "reported_reset_reason": reported,
+                         "reset_reason_source": evidence["reset_reason_source"],
+                         "reset_reason_confidence": evidence["reset_reason_confidence"],
+                         "category": category}, separators=(",", ":")), event["id"]))
+
+
 def classify_incident(before, during, after=None, offline_seconds=0):
     """Classify only from correlated observations, never from a stale resetReason alone."""
     before, during, after = before or {}, during or {}, after or {}
@@ -1107,21 +1448,21 @@ def classify_incident(before, during, after=None, offline_seconds=0):
     if during.get("overheat_mode") or after.get("overheat_mode"):
         return "THERMAL_EVENT", fault
     old_uptime, new_uptime = before.get("uptimeSeconds"), after.get("uptimeSeconds")
-    rebooted = isinstance(old_uptime, (int, float)) and isinstance(new_uptime, (int, float)) and new_uptime + 30 < old_uptime
-    reset = str(after.get("resetReason") or "").lower()
+    rebooted = reboot_detected(before, after)
     hash_stopped = (during.get("hashRate") or 0) <= 10
     idle_power = 0 < (during.get("power") or 0) <= IDLE_POWER_W
     uptime_continues = isinstance(old_uptime, (int, float)) and isinstance(during.get("uptimeSeconds"), (int, float)) and during["uptimeSeconds"] >= old_uptime
     if hash_stopped and idle_power and uptime_continues:
         return "MINING_STALL", "Controller erreichbar; Hashrate und ASIC-Leistung eingebrochen; Uptime lief weiter"
-    if rebooted and any(word in reset for word in ("power-on", "power on", "brownout")):
-        return "POWER_INTERRUPTION", "Uptime-Reset und neuer Power-on-Resetgrund"
     if rebooted:
-        if 'watchdog' in reset or 'panic' in reset or 'exception' in reset:
-            return "WATCHDOG_RESET", "Uptime-Reset mit Watchdog-/Panic-Resetgrund"
-        if 'esp_restart' in reset:
-            return "SOFTWARE_RESTART", "Uptime-Reset mit Software-Resetgrund"
-        return "SYSTEM_RESET", "Uptime-Reset; Auslöser nicht eindeutig"
+        reason = reset_reason_evidence(after.get("resetReason"))
+        if reason["category"] == "BROWNOUT":
+            return "POWER_INTERRUPTION", "Uptime-Reset; Brownout von AxeOS API gemeldet"
+        if reason["category"] in {"TASK_WATCHDOG", "INTERRUPT_WATCHDOG", "WATCHDOG"}:
+            return "WATCHDOG_RESET", f"Uptime-Reset; {reason['category']} von AxeOS API gemeldet"
+        if reason["category"] in {"SOFTWARE_RESET", "MANUAL_RESTART"}:
+            return "SOFTWARE_RESTART", "Uptime-Reset mit gemeldetem Software-Reset"
+        return "SYSTEM_RESET", "Uptime-Reset; Ursache nicht unabhängig bestätigt"
     if offline_seconds:
         return "NETWORK_OR_API_OUTAGE", "API zeitweise nicht erreichbar; kein Uptime-Reset beobachtet"
     if during.get("isUsingFallbackStratum"):
@@ -1133,6 +1474,42 @@ def duration_text(seconds):
     minutes, seconds = divmod(max(0, int(seconds)), 60)
     hours, minutes = divmod(minutes, 60)
     return (f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s")
+
+
+def reboot_statistics():
+    with db() as con:
+        rows = con.execute("SELECT started_at,facts FROM incidents WHERE kind='DEVICE_REBOOT' ORDER BY started_at").fetchall()
+        longest = con.execute("SELECT MAX(uptime) FROM samples").fetchone()[0]
+        asic_faults = con.execute("""SELECT COUNT(*) FROM incidents WHERE kind IN
+            ('ASIC_DOMAIN_STALL','HASHRATE_DEGRADATION','MINING_STALL','REGULATOR_FAULT')""").fetchone()[0]
+    counts = {"reboots": len(rows), "confirmed_panic": 0, "reported_panic": 0,
+              "brownout": 0, "watchdog": 0, "software_reset": 0, "unknown": 0}
+    stamps = []
+    for row in rows:
+        facts = json.loads(row["facts"] or "{}")
+        category = facts.get("category", "UNKNOWN")
+        confidence = facts.get("reset_reason_confidence", "UNKNOWN")
+        stamps.append(row["started_at"])
+        if category == "PANIC":
+            key = "confirmed_panic" if confidence == "CONFIRMED" else "reported_panic"
+            counts[key] += 1
+        elif category == "BROWNOUT":
+            counts["brownout"] += 1
+        elif category in {"TASK_WATCHDOG", "INTERRUPT_WATCHDOG", "WATCHDOG"}:
+            counts["watchdog"] += 1
+        elif category in {"SOFTWARE_RESET", "MANUAL_RESTART"}:
+            counts["software_reset"] += 1
+        elif category == "UNKNOWN":
+            counts["unknown"] += 1
+    intervals = [right - left for left, right in zip(stamps, stamps[1:])]
+    return {**counts,
+            "mean_time_between_reboots_seconds": (sum(intervals) / len(intervals) if intervals else None),
+            "last_reboot": stamps[-1] if stamps else None,
+            "longest_continuous_uptime_seconds": longest,
+            "asic_stability": {"status": "PASS" if not asic_faults else "WARNING",
+                               "fault_incidents": asic_faults},
+            "system_stability": {"status": "PASS" if not rows else "WARNING",
+                                 "reboots": len(rows)}}
 
 
 def metrics_text(data):
@@ -1171,6 +1548,9 @@ def market_poller():
             with market_lock:
                 address = miner_address
                 pool_host = miner_pool_host
+            if not address:
+                time.sleep(min(POLL_SECONDS, MARKET_SECONDS))
+                continue
             market_generation = catalog.active() if catalog else None
             try:
                 network = get_json(PUBLIC_POOL_API_URL + "/network")
@@ -1374,6 +1754,28 @@ def offline_event_context():
                         else "Bitaxe seit mehreren Polls nicht erreichbar")}
 
 
+def online_restored_details(before, current, offline_since, restored_at):
+    before_uptime = before.get("uptimeSeconds") if before else None
+    current_uptime = current.get("uptimeSeconds")
+    reset = (isinstance(before_uptime, (int, float)) and isinstance(current_uptime, (int, float))
+             and current_uptime + 30 < before_uptime)
+    classification = "POSSIBLE_DEVICE_REBOOT_OR_POWER_CYCLE" if reset else "LIKELY_NETWORK_OR_API_OUTAGE"
+    return {"outage_started_at": offline_since, "restored_at": restored_at,
+            "duration_seconds": max(0, restored_at - offline_since),
+            "uptime_before": before_uptime, "uptime_after": current_uptime,
+            "uptime_reset": reset, "classification": classification}
+
+
+def record_online_restored(before, current, offline_since, restored_at, incident_id=None):
+    details = online_restored_details(before, current, offline_since, restored_at)
+    label = ("möglicher Geräte-Neustart/Power-Cycle" if details["uptime_reset"]
+             else "wahrscheinlicher Netzwerk-/API-Ausfall")
+    add_event("ONLINE_RESTORED", "warning" if details["uptime_reset"] else "info",
+              f"Bitaxe nach {details['duration_seconds']} Sekunden wieder erreichbar · {label}",
+              restored_at, incident_id=incident_id, details=details)
+    return details
+
+
 def auto_restart_enabled():
     if catalog and (not catalog.get()['fingerprint'] or database_path() != catalog.database()):
         return False
@@ -1459,9 +1861,8 @@ def detect(old, new, stamp=None):
         if fired:
             add_event(kind, severity, message)
     old_uptime, new_uptime = old.get("uptimeSeconds"), new.get("uptimeSeconds")
-    if (isinstance(old_uptime, (int, float)) and isinstance(new_uptime, (int, float))
-            and new_uptime + 30 < old_uptime):
-        add_event("REBOOT", "warning", "Neustart erkannt: " + str(new.get("resetReason") or "Uptime-Reset"))
+    if reboot_detected(old, new):
+        record_device_reboot(old, new, stamp)
     pending_profile = state_value("pending_mining_profile")
     if pending_profile and active_mining_profile(new) == pending_profile:
         profile = MINING_PROFILES[pending_profile]
@@ -1501,6 +1902,8 @@ def poll_generation():
     incident_before = None
     incident_during = None
     offline_since = None
+    restored_details = None
+    outage_classification = None
     degraded_since = None
     degradation_baseline = None
     degradation_values = []
@@ -1567,6 +1970,10 @@ def poll_generation():
                 successes += 1
                 pause_now = bool(data.get("miningPaused"))
                 pause_guard = pause_now or user_pause_grace_active(stamp)
+                restored_details = None
+                if previous_failures >= OFFLINE_AFTER_POLLS and offline_since is not None:
+                    restored_details = record_online_restored(old, data, offline_since, stamp, incident_id)
+                    outage_classification = restored_details
                 if previous_failures >= OFFLINE_AFTER_POLLS and was_user_paused:
                     add_event("RECOVERED", "info", "Bitaxe nach Benutzerpause wieder erreichbar", stamp,
                               details={"after_user_pause": True})
@@ -1796,8 +2203,15 @@ def poll_generation():
                     attach_incident_sample(incident_id, stamp, "during", data)
                     offline_duration = 0 if offline_since is None else stamp - offline_since
                     kind, reason = classify_incident(incident_before, incident_during or data, data if rebooted else {}, offline_duration)
+                    if outage_classification:
+                        if outage_classification["uptime_reset"]:
+                            kind, reason = "REBOOT", "Gerät nach Ausfall mit zurückgesetzter Uptime wieder erreichbar; möglicher Reboot/Power-Cycle"
+                        else:
+                            kind, reason = "NETWORK_OR_API_OUTAGE", "Gerät bei fortlaufender Uptime wieder erreichbar; wahrscheinlicher Netzwerk-/API-Ausfall"
                     facts = {"controller_reachable": True, "uptime_reset": rebooted,
                              "offline_seconds": offline_duration, "reset_reason": data.get("resetReason") if rebooted else None}
+                    if outage_classification:
+                        facts["outage"] = outage_classification
                     update_incident(incident_id, kind=kind, title=kind.replace("_", " "),
                                     summary=reason or "Ursache nicht eindeutig", observed_cause=fact, facts=facts)
                     if not stopped and successes >= RECOVERY_POLLS:
@@ -1806,6 +2220,7 @@ def poll_generation():
                                         after_sample=safe_payload(data), severity="warning")
                         add_event("RECOVERED", "info", recovery)
                         incident_id = incident_start = incident_before = incident_during = offline_since = None
+                        outage_classification = None
                 if pause_now:
                     state = "USER PAUSED"
                 elif state in {"OFFLINE", "RECOVERING", "USER PAUSED"}:
@@ -1873,7 +2288,23 @@ def initialize_storage():
             backup(original, destination)
     catalog = Catalog(DB_PATH)
     catalog.finish_operations()
-    initialize_database(catalog.database())
+    generation_paths = [(item['id'], catalog.database(item['id'])) for item in catalog.public()['generations']]
+    needs_v5 = []
+    for generation, path in generation_paths:
+        if not Path(path).exists():
+            continue
+        with connection(path) as con:
+            has_migrations = con.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone()
+            ready = has_migrations and con.execute('SELECT 1 FROM schema_migrations WHERE version=5').fetchone()
+        if not ready:
+            needs_v5.append((generation, path))
+    if needs_v5:
+        backup_dir = original.parent / 'backups' / ('migration-v5-' + str(now()) + '-' + uuid.uuid4().hex[:8])
+        for generation, path in needs_v5:
+            backup(path, backup_dir / (generation + '.sqlite3'))
+        backup(catalog.path, backup_dir / 'generations.sqlite3')
+    for _, path in generation_paths:
+        initialize_database(path)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1915,6 +2346,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(catalog.preview() if catalog else {})
         if p.path == '/api/diagnostics':
             return self.send_json(diagnostic_history())
+        if p.path == '/api/stability':
+            return self.send_json(reboot_statistics())
         if p.path == '/api/timeline':
             with db() as con:
                 rows = con.execute('''SELECT id,started_at ts,kind,severity,title message,'incident' source
@@ -1924,12 +2357,23 @@ class Handler(BaseHTTPRequestHandler):
         if p.path == '/api/storage':
             with db() as con:
                 pages = con.execute('PRAGMA page_count').fetchone()[0]
+                free_pages = con.execute('PRAGMA freelist_count').fetchone()[0]
                 size = con.execute('PRAGMA page_size').fetchone()[0]
                 count = con.execute('SELECT COUNT(*) FROM samples').fetchone()[0]
                 first = con.execute('SELECT MIN(ts) FROM samples').fetchone()[0]
                 sessions = con.execute('SELECT COUNT(*) FROM boot_sessions').fetchone()[0]
-            return self.send_json({'bytes': pages * size, 'samples': count, 'started_at': first,
-                                   'boot_sessions': sessions, 'retention': 'Keine automatische Löschung'})
+                hourly = con.execute("SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates WHERE period='hour'").fetchone()[0]
+                daily = con.execute("SELECT COUNT(DISTINCT period_start) FROM telemetry_aggregates WHERE period='day'").fetchone()[0]
+                last_retention = con.execute("SELECT value FROM monitor_state WHERE key='last_retention_run'").fetchone()
+            path = Path(database_path())
+            files = [path, Path(str(path) + '-wal'), Path(str(path) + '-shm')]
+            return self.send_json({'bytes': sum(item.stat().st_size for item in files if item.exists()),
+                                   'database_bytes': pages * size, 'free_bytes': free_pages * size,
+                                   'samples': count, 'started_at': first, 'hourly_periods': hourly,
+                                   'daily_periods': daily, 'last_retention_at': int(last_retention[0]) if last_retention else None,
+                                   'boot_sessions': sessions, 'raw_retention_days': RAW_RETENTION_DAYS,
+                                   'hourly_retention_days': HOURLY_RETENTION_DAYS,
+                                   'daily_retention_days': None})
         if p.path == "/":
             body = HTML.encode()
             self.send_response(200)
@@ -1993,6 +2437,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "age_seconds": age, "summary": summary, "data": data,
                                     "hashrate_history": cached_historical_hashrate(),
                                     "voltage_24h": voltage_summary(),
+                                    "stability": reboot_statistics(),
                                     "auto_restart": {"enabled": auto_restart_enabled(),
                                         "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                         "after_seconds": AUTO_RESTART_AFTER_SECONDS,
@@ -2184,5 +2629,6 @@ if __name__ == "__main__":
     initialize_storage()
     backfill_historical_incidents()
     threading.Thread(target=poller, daemon=True).start()
+    threading.Thread(target=retention_scheduler, daemon=True).start()
     threading.Thread(target=market_poller, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
