@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.5.1
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.6.0
     build: .
     container_name: bitaxe-monitor
     restart: unless-stopped
@@ -63,12 +63,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.5.1"
+  version: "1.6.0"
   update_at: "2026-10-02"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Safe multi-tier telemetry retention with hourly and permanent daily history plus improved outage recovery classification.
-    de_DE: Sichere mehrstufige Telemetrie-Retention mit Stunden- und dauerhafter Tageshistorie sowie verbesserter Ausfallklassifikation.
+    en_US: Evidence-based reboot diagnostics with confidence levels, temporal correlations and separate ASIC/system stability.
+    de_DE: Evidenzbasierte Neustartdiagnose mit Vertrauensstufen, zeitlichen Korrelationen und getrennter ASIC-/Systemstabilität.

@@ -192,7 +192,7 @@ class IncidentClassificationTests(unittest.TestCase):
                     kinds = [row[0] for row in con.execute("SELECT kind FROM events ORDER BY ts,id")]
                 self.assertIn("USER_PAUSED", kinds)
                 self.assertIn("USER_RESUMED", kinds)
-                self.assertIn("REBOOT", kinds)
+                self.assertIn("DEVICE_REBOOT", kinds)
             finally:
                 APP.DB_PATH = original_path
 
@@ -410,7 +410,64 @@ class IncidentClassificationTests(unittest.TestCase):
     def test_b_offline_reboot_and_power_on_is_power_interruption(self):
         before = {"uptimeSeconds": 3600}
         after = {"uptimeSeconds": 8, "resetReason": "Reset due to power-on event"}
-        self.assertEqual(APP.classify_incident(before, {}, after, 40)[0], "POWER_INTERRUPTION")
+        self.assertEqual(APP.classify_incident(before, {}, after, 40)[0], "SYSTEM_RESET")
+
+    def test_uptime_reset_without_reason_is_unknown_reboot(self):
+        evidence = APP.reset_reason_evidence()
+        self.assertTrue(APP.reboot_detected({"uptimeSeconds": 500}, {"uptimeSeconds": 4}))
+        self.assertEqual((evidence["category"], evidence["reset_reason_confidence"]),
+                         ("UNKNOWN", "UNKNOWN"))
+
+    def test_api_panic_is_reported_not_confirmed(self):
+        evidence = APP.reset_reason_evidence("Software reset due to exception/panic")
+        self.assertEqual(evidence["category"], "PANIC")
+        self.assertEqual(evidence["reset_reason_source"], "API")
+        self.assertEqual(evidence["reset_reason_confidence"], "REPORTED")
+
+    def test_explicit_log_panic_is_confirmed(self):
+        evidence = APP.reset_reason_evidence("Software reset due to exception/panic",
+                                             "ESP_RST_PANIC Guru Meditation backtrace")
+        self.assertEqual((evidence["category"], evidence["reset_reason_source"],
+                          evidence["reset_reason_confidence"]),
+                         ("PANIC", "LOG", "CONFIRMED"))
+
+    def test_brownout_watchdog_and_manual_reset_categories(self):
+        self.assertEqual(APP.reset_reason_evidence("ESP_RST_BROWNOUT")["category"], "BROWNOUT")
+        self.assertEqual(APP.reset_reason_evidence("ESP_RST_TASK_WDT")["category"], "TASK_WATCHDOG")
+        self.assertEqual(APP.reset_reason_evidence("manual restart")["category"], "MANUAL_RESTART")
+
+    def test_network_timeout_with_continuing_hashrate_is_not_asic_stall(self):
+        before = {"uptimeSeconds": 1000, "hashRate": 1450, "power": 24}
+        during = {"uptimeSeconds": 1010, "hashRate": 1440, "power": 24}
+        kind, _ = APP.classify_incident(before, during, {}, offline_seconds=10)
+        self.assertEqual(kind, "NETWORK_OR_API_OUTAGE")
+
+    def test_reboot_incident_preserves_report_and_correlation_without_causation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "metrics.sqlite3")
+            try:
+                APP.init_db()
+                APP.save({"uptimeSeconds": 1000, "hashRate": 1450, "hashRate_1h": 1450,
+                          "power": 24, "voltage": 5000}, 970)
+                APP.add_event("OFFLINE", "warning", "API nicht erreichbar", 980)
+                APP.record_device_reboot(
+                    {"uptimeSeconds": 1000, "hashRate": 1450, "power": 24, "voltage": 5000},
+                    {"uptimeSeconds": 5, "hashRate": 1400, "power": 23, "voltage": 5000,
+                     "resetReason": "Software reset due to exception/panic"}, 1000)
+                with APP.db() as con:
+                    row = con.execute("SELECT kind,facts FROM incidents").fetchone()
+                facts = json.loads(row["facts"])
+                self.assertEqual(row["kind"], "DEVICE_REBOOT")
+                self.assertEqual(facts["reset_reason_confidence"], "REPORTED")
+                self.assertIn("REBOOT_AFTER_NETWORK_FAILURE", facts["correlations"]["flags"])
+                self.assertFalse(facts["correlations"]["causation_claimed"])
+                stats = APP.reboot_statistics()
+                self.assertEqual(stats["reported_panic"], 1)
+                self.assertEqual(stats["asic_stability"]["status"], "PASS")
+                self.assertEqual(stats["system_stability"]["status"], "WARNING")
+            finally:
+                APP.DB_PATH = original
 
     def test_c_short_api_outage_without_reboot_is_network_outage(self):
         before = {"uptimeSeconds": 3600}

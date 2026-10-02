@@ -89,7 +89,8 @@ ALLOWED = (
 INCIDENT_KINDS = {
     "POWER_INTERRUPTION", "MINING_STALL", "SOFTWARE_RESTART",
     "NETWORK_OR_API_OUTAGE", "THERMAL_EVENT", "POOL_OR_STRATUM_ISSUE",
-    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "REGULATOR_FAULT", "WATCHDOG_RESET", "SYSTEM_RESET", "UNKNOWN"
+    "HASHRATE_DEGRADATION", "ASIC_DOMAIN_STALL", "REGULATOR_FAULT", "WATCHDOG_RESET",
+    "DEVICE_REBOOT", "SYSTEM_RESET", "UNKNOWN"
 }
 
 LAYOUT_WIDGETS = (
@@ -848,7 +849,7 @@ def chart_markers(start, end):
         events = con.execute("""SELECT id,ts,NULL ended_at,kind,message description,automatic
             FROM events WHERE ts BETWEEN ? AND ? AND kind IN
             ('ASIC_DOMAIN_STALL_DETECTED','HASHRATE_DROP_DETECTED','AUTO_RECOVERY_RESTART','AUTO_RECOVERY_SUPPRESSED','POWER_FAULT',
-             'OFFLINE','REBOOT','RECOVERED','ONLINE_RESTORED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
+             'OFFLINE','REBOOT','DEVICE_REBOOT','RECOVERED','ONLINE_RESTORED','POOL_OR_STRATUM_ISSUE','THERMAL_EVENT')""",
             (start, end)).fetchall()
         pauses = planned_pause_intervals(con, start, end)
     pause_markers = [{"id": None, "ts": left, "ended_at": right, "kind": "USER_PAUSED",
@@ -1219,6 +1220,126 @@ def observed_cause(data):
     return None
 
 
+def reboot_detected(before, after):
+    """A reset reason is not evidence of a new reboot; the uptime discontinuity is."""
+    before_uptime = (before or {}).get("uptimeSeconds")
+    after_uptime = (after or {}).get("uptimeSeconds")
+    return (isinstance(before_uptime, (int, float))
+            and isinstance(after_uptime, (int, float))
+            and after_uptime + 30 < before_uptime)
+
+
+def reset_reason_evidence(reported_reason=None, log_evidence=None):
+    """Normalize reset evidence without promoting an API claim to confirmed fact."""
+    reported = str(reported_reason or "").strip() or None
+    evidence = str(log_evidence or "").strip() or None
+    text = (evidence or reported or "").lower()
+    source = "LOG" if evidence else ("API" if reported else "UNKNOWN")
+    confidence = "CONFIRMED" if evidence else ("REPORTED" if reported else "UNKNOWN")
+    if any(token in text for token in ("esp_rst_brownout", "brownout")):
+        category = "BROWNOUT"
+    elif "esp_rst_task_wdt" in text or "task watchdog" in text:
+        category = "TASK_WATCHDOG"
+    elif "esp_rst_int_wdt" in text or "interrupt watchdog" in text:
+        category = "INTERRUPT_WATCHDOG"
+    elif "esp_rst_wdt" in text or "watchdog" in text:
+        category = "WATCHDOG"
+    elif ("esp_rst_panic" in text or "guru meditation" in text
+          or (evidence and "panic" in text)
+          or (evidence and "exception" in text and any(token in text for token in ("backtrace", "abort", "crash")))):
+        category = "PANIC"
+    elif "panic" in text or "exception" in text:
+        category = "PANIC"
+        confidence = "REPORTED" if reported else "INFERRED"
+        source = "API" if reported else "INFERRED"
+    elif any(token in text for token in ("esp_rst_poweron", "power-on", "power on")):
+        category = "POWER_ON_RESET"
+    elif any(token in text for token in ("esp_rst_ext", "external reset")):
+        category = "EXTERNAL_RESET"
+    elif any(token in text for token in ("manual restart", "user restart")):
+        category = "MANUAL_RESTART"
+    elif any(token in text for token in ("esp_rst_sw", "software reset", "esp_restart")):
+        category = "SOFTWARE_RESET"
+    else:
+        category = "UNKNOWN"
+        if not reported and not evidence:
+            source, confidence = "UNKNOWN", "UNKNOWN"
+    return {"category": category, "reported_reset_reason": reported,
+            "reset_reason_source": source, "reset_reason_confidence": confidence,
+            "log_evidence": evidence}
+
+
+def reboot_correlations(started_at, before, after):
+    """Return temporal correlations only; none of these flags asserts causation."""
+    samples = get_sample_window(int(started_at) - 300, int(started_at) - 1)
+    with db() as con:
+        events = con.execute("SELECT ts,kind FROM events WHERE ts BETWEEN ? AND ? ORDER BY ts",
+                             (int(started_at) - 300, int(started_at) - 1)).fetchall()
+    flags, observations = [], []
+
+    def note(flag, label, timestamp):
+        if flag in flags:
+            return
+        flags.append(flag)
+        seconds = max(0, int(started_at) - int(timestamp))
+        observations.append({"flag": flag, "seconds_before_reboot": seconds,
+                             "message": f"{label} {seconds} Sekunden vor dem Neustart beobachtet"})
+
+    for event in events:
+        if event["kind"] in {"OFFLINE", "NETWORK_OR_API_OUTAGE"}:
+            note("REBOOT_AFTER_NETWORK_FAILURE", "Netzwerk-/API-Ausfall", event["ts"])
+        if event["kind"] == "POOL_OR_STRATUM_ISSUE":
+            note("REBOOT_AFTER_POOL_FAILURE", "Pool-/Stratum-Störung", event["ts"])
+        if event["kind"] in {"HASHRATE_DROP_DETECTED", "ASIC_DOMAIN_STALL_DETECTED"}:
+            note("REBOOT_AFTER_HASHRATE_DROP", "Hashrate-Einbruch", event["ts"])
+    for sample in samples:
+        if sample.get("isUsingFallbackStratum"):
+            note("REBOOT_AFTER_FALLBACK_SWITCH", "Fallback-Pool", sample["ts"])
+        voltage = number(sample.get("voltage"))
+        if voltage is not None and voltage < VOLTAGE_LOW_V * 1000:
+            note("REBOOT_AFTER_VIN_ANOMALY", "VIN-Anomalie", sample["ts"])
+    last = before or (samples[-1] if samples else {})
+    expected = number(last.get("expectedHashrate")) or number(last.get("hashRate_1h"))
+    observed = number(last.get("hashRate"))
+    if expected and observed is not None and observed < expected * (1 - AUTO_RESTART_LOSS):
+        note("REBOOT_AFTER_HASHRATE_DROP", "Hashrate-Einbruch", last.get("ts", started_at))
+    if not flags:
+        flags.append("REBOOT_WITHOUT_PRECURSOR")
+        observations.append({"flag": flags[0], "seconds_before_reboot": None,
+                             "message": "Kein definierter Vorläufer im 5-Minuten-Fenster beobachtet"})
+    return {"flags": flags, "observations": observations,
+            "window_seconds": 300, "causation_claimed": False}
+
+
+def record_device_reboot(before, after, stamp, log_evidence=None):
+    evidence = reset_reason_evidence(after.get("resetReason"), log_evidence)
+    correlations = reboot_correlations(stamp, before, after)
+    last_before, _ = pre_crash_snapshot(stamp)
+    first_after = safe_payload(after) | {"ts": int(stamp)}
+    facts = {"reboot_detected": True, **evidence,
+             "previous_uptime_seconds": before.get("uptimeSeconds"),
+             "new_uptime_seconds": after.get("uptimeSeconds"),
+             "last_successful_sample_before": last_before or safe_payload(before),
+             "first_successful_sample_after": first_after,
+             "correlations": correlations,
+             "diagnostic_window": {"before_seconds": 300, "after_seconds": 300}}
+    category = evidence["category"]
+    summary = ("Neustart erkannt; Ursache unbekannt" if category == "UNKNOWN" else
+               f"Neustart erkannt; gemeldete Reset-Kategorie {category}")
+    incident_id = create_incident(stamp, "DEVICE_REBOOT", "DEVICE REBOOT", summary,
+                                  "warning", facts=facts, before_override=before)
+    attach_incident_sample(incident_id, stamp, "first_after_reboot", after)
+    update_incident(incident_id, ended_at=stamp, status="RESOLVED",
+                    recovery="AxeOS/API nach Neustart erreichbar",
+                    after_sample=safe_payload(after), facts=facts)
+    add_event("DEVICE_REBOOT", "warning", summary, stamp, incident_id=incident_id,
+              details={"reported_reset_reason": evidence["reported_reset_reason"],
+                       "reset_reason_source": evidence["reset_reason_source"],
+                       "reset_reason_confidence": evidence["reset_reason_confidence"],
+                       "category": category, "correlations": correlations["flags"]})
+    return incident_id
+
+
 def classify_incident(before, during, after=None, offline_seconds=0):
     """Classify only from correlated observations, never from a stale resetReason alone."""
     before, during, after = before or {}, during or {}, after or {}
@@ -1228,21 +1349,21 @@ def classify_incident(before, during, after=None, offline_seconds=0):
     if during.get("overheat_mode") or after.get("overheat_mode"):
         return "THERMAL_EVENT", fault
     old_uptime, new_uptime = before.get("uptimeSeconds"), after.get("uptimeSeconds")
-    rebooted = isinstance(old_uptime, (int, float)) and isinstance(new_uptime, (int, float)) and new_uptime + 30 < old_uptime
-    reset = str(after.get("resetReason") or "").lower()
+    rebooted = reboot_detected(before, after)
     hash_stopped = (during.get("hashRate") or 0) <= 10
     idle_power = 0 < (during.get("power") or 0) <= IDLE_POWER_W
     uptime_continues = isinstance(old_uptime, (int, float)) and isinstance(during.get("uptimeSeconds"), (int, float)) and during["uptimeSeconds"] >= old_uptime
     if hash_stopped and idle_power and uptime_continues:
         return "MINING_STALL", "Controller erreichbar; Hashrate und ASIC-Leistung eingebrochen; Uptime lief weiter"
-    if rebooted and any(word in reset for word in ("power-on", "power on", "brownout")):
-        return "POWER_INTERRUPTION", "Uptime-Reset und neuer Power-on-Resetgrund"
     if rebooted:
-        if 'watchdog' in reset or 'panic' in reset or 'exception' in reset:
-            return "WATCHDOG_RESET", "Uptime-Reset mit Watchdog-/Panic-Resetgrund"
-        if 'esp_restart' in reset:
-            return "SOFTWARE_RESTART", "Uptime-Reset mit Software-Resetgrund"
-        return "SYSTEM_RESET", "Uptime-Reset; Auslöser nicht eindeutig"
+        reason = reset_reason_evidence(after.get("resetReason"))
+        if reason["category"] == "BROWNOUT":
+            return "POWER_INTERRUPTION", "Uptime-Reset; Brownout von AxeOS API gemeldet"
+        if reason["category"] in {"TASK_WATCHDOG", "INTERRUPT_WATCHDOG", "WATCHDOG"}:
+            return "WATCHDOG_RESET", f"Uptime-Reset; {reason['category']} von AxeOS API gemeldet"
+        if reason["category"] in {"SOFTWARE_RESET", "MANUAL_RESTART"}:
+            return "SOFTWARE_RESTART", "Uptime-Reset mit gemeldetem Software-Reset"
+        return "SYSTEM_RESET", "Uptime-Reset; Ursache nicht unabhängig bestätigt"
     if offline_seconds:
         return "NETWORK_OR_API_OUTAGE", "API zeitweise nicht erreichbar; kein Uptime-Reset beobachtet"
     if during.get("isUsingFallbackStratum"):
@@ -1254,6 +1375,42 @@ def duration_text(seconds):
     minutes, seconds = divmod(max(0, int(seconds)), 60)
     hours, minutes = divmod(minutes, 60)
     return (f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s")
+
+
+def reboot_statistics():
+    with db() as con:
+        rows = con.execute("SELECT started_at,facts FROM incidents WHERE kind='DEVICE_REBOOT' ORDER BY started_at").fetchall()
+        longest = con.execute("SELECT MAX(uptime) FROM samples").fetchone()[0]
+        asic_faults = con.execute("""SELECT COUNT(*) FROM incidents WHERE kind IN
+            ('ASIC_DOMAIN_STALL','HASHRATE_DEGRADATION','MINING_STALL','REGULATOR_FAULT')""").fetchone()[0]
+    counts = {"reboots": len(rows), "confirmed_panic": 0, "reported_panic": 0,
+              "brownout": 0, "watchdog": 0, "software_reset": 0, "unknown": 0}
+    stamps = []
+    for row in rows:
+        facts = json.loads(row["facts"] or "{}")
+        category = facts.get("category", "UNKNOWN")
+        confidence = facts.get("reset_reason_confidence", "UNKNOWN")
+        stamps.append(row["started_at"])
+        if category == "PANIC":
+            key = "confirmed_panic" if confidence == "CONFIRMED" else "reported_panic"
+            counts[key] += 1
+        elif category == "BROWNOUT":
+            counts["brownout"] += 1
+        elif category in {"TASK_WATCHDOG", "INTERRUPT_WATCHDOG", "WATCHDOG"}:
+            counts["watchdog"] += 1
+        elif category in {"SOFTWARE_RESET", "MANUAL_RESTART"}:
+            counts["software_reset"] += 1
+        elif category == "UNKNOWN":
+            counts["unknown"] += 1
+    intervals = [right - left for left, right in zip(stamps, stamps[1:])]
+    return {**counts,
+            "mean_time_between_reboots_seconds": (sum(intervals) / len(intervals) if intervals else None),
+            "last_reboot": stamps[-1] if stamps else None,
+            "longest_continuous_uptime_seconds": longest,
+            "asic_stability": {"status": "PASS" if not asic_faults else "WARNING",
+                               "fault_incidents": asic_faults},
+            "system_stability": {"status": "PASS" if not rows else "WARNING",
+                                 "reboots": len(rows)}}
 
 
 def metrics_text(data):
@@ -1615,9 +1772,8 @@ def detect(old, new, stamp=None):
         if fired:
             add_event(kind, severity, message)
     old_uptime, new_uptime = old.get("uptimeSeconds"), new.get("uptimeSeconds")
-    if (isinstance(old_uptime, (int, float)) and isinstance(new_uptime, (int, float))
-            and new_uptime + 30 < old_uptime):
-        add_event("REBOOT", "warning", "Neustart erkannt: " + str(new.get("resetReason") or "Uptime-Reset"))
+    if reboot_detected(old, new):
+        record_device_reboot(old, new, stamp)
     pending_profile = state_value("pending_mining_profile")
     if pending_profile and active_mining_profile(new) == pending_profile:
         profile = MINING_PROFILES[pending_profile]
@@ -2100,6 +2256,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(catalog.preview() if catalog else {})
         if p.path == '/api/diagnostics':
             return self.send_json(diagnostic_history())
+        if p.path == '/api/stability':
+            return self.send_json(reboot_statistics())
         if p.path == '/api/timeline':
             with db() as con:
                 rows = con.execute('''SELECT id,started_at ts,kind,severity,title message,'incident' source
@@ -2189,6 +2347,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "age_seconds": age, "summary": summary, "data": data,
                                     "hashrate_history": cached_historical_hashrate(),
                                     "voltage_24h": voltage_summary(),
+                                    "stability": reboot_statistics(),
                                     "auto_restart": {"enabled": auto_restart_enabled(),
                                         "loss_threshold_pct": AUTO_RESTART_LOSS * 100,
                                         "after_seconds": AUTO_RESTART_AFTER_SECONDS,
