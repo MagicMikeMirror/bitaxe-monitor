@@ -224,6 +224,16 @@ The classification is an evidence-based diagnostic aid, not an electrical
 measurement instrument. Transient faults can occur between polls; uncertain cases
 remain `UNKNOWN` instead of being presented as facts.
 
+An uptime discontinuity creates a separate `DEVICE_REBOOT` incident. The raw AxeOS
+`resetReason` is retained together with `API`, `LOG`, `INFERRED` or `UNKNOWN` as its
+source and `CONFIRMED`, `REPORTED`, `INFERRED` or `UNKNOWN` as confidence. In
+particular, the API text `Software reset due to exception/panic` remains a reported
+panic unless independent log evidence such as `ESP_RST_PANIC`, Guru Meditation or
+a crash/backtrace confirms it. The incident view correlates telemetry and events for
+five minutes before and after the reboot but explicitly does not claim causation.
+`/api/stability` exposes reboot counts, mean time between reboots, last reboot,
+longest observed uptime, and separate ASIC versus system/firmware stability ratings.
+
 Automatic restart is disabled by default. When enabled, it only acts while AxeOS is
 reachable, power and frequency indicate active mining, no fault/overheat/pause or
 fallback-pool state is present, and hashrate remains below the configured percentage
@@ -257,7 +267,7 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.5.1` from source or
+Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.6.0` from source or
 use its published image when available, and recreate the container. The sample
 table and existing history remain unchanged; schema version 5 only adds the
 aggregate table. Startup creates verified pre-migration backups and does not bind

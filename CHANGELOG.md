@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0
+
+- Record every uptime-confirmed reboot as a separate `DEVICE_REBOOT` incident with the raw AxeOS `resetReason`, evidence source and confidence.
+- Treat API text such as `Software reset due to exception/panic` as reported, never as an independently confirmed panic.
+- Correlate the five minutes before and after a reboot without claiming causation and keep network/API failures separate from ASIC faults.
+- Add reboot statistics plus independent ASIC and system/firmware stability ratings to the dashboard and `/api/stability`.
+
 ## 1.5.1
 
 - Retry Public Pool polling at the telemetry interval until AxeOS has supplied the miner address after container startup.

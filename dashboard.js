@@ -33,6 +33,10 @@ element('div', 'Gerät & Historie', generationBar, 'label');
 const generationSelect = element('select', null, generationBar);
 generationSelect.setAttribute('aria-label', 'Gerätegeneration');
 const generationNotice = element('p', 'Bestehende Historie wird geladen …', generationBar, 'sub');
+const stabilityNotice = element('p', '', generationBar, 'sub');
+const stabilityDetails = element('details', null, generationBar);
+element('summary', 'Reboot-Statistik', stabilityDetails);
+const stabilityCounts = element('p', '', stabilityDetails, 'sub');
 const switchButton = element('button', 'Gerätewechsel vorbereiten', generationBar);
 const backupButton = element('button', 'Historie sichern', generationBar);
 const storageNotice = element('span', '', generationBar, 'sub');
@@ -129,6 +133,9 @@ current = async () => {
   $('state').textContent = state;
   $('health').textContent = state === 'WAITING FOR DEVICE' ? 'Warte auf Gerät' : state === 'IDENTITY REQUIRED' ? 'Gerätezuordnung erforderlich' : state;
   $('healthText').textContent = x.summary || 'Die bestehende Historie bleibt erhalten.';
+  const stability=x.stability||{},asic=stability.asic_stability||{},system=stability.system_stability||{};
+  stabilityNotice.textContent=`ASIC-Stabilität ${asic.status||'—'} · System/Firmware ${system.status||'—'} · Reboots ${stability.reboots??'—'} · letzter ${stability.last_reboot?new Date(stability.last_reboot*1000).toLocaleString('de-DE'):'—'} · längste Laufzeit ${dur(stability.longest_continuous_uptime_seconds)}`;
+  stabilityCounts.textContent=`Bestätigter Panic ${stability.confirmed_panic??0} · gemeldeter Panic ${stability.reported_panic??0} · Brownout ${stability.brownout??0} · Watchdog ${stability.watchdog??0} · Software/Manuell ${stability.software_reset??0} · unbekannt ${stability.unknown??0} · mittlerer Abstand ${dur(stability.mean_time_between_reboots_seconds)}`;
   $('ver').textContent = (d.version || 'AxeOS') + ' · Board ' + (d.boardVersion || '—') + ' · Messung ' + (x.age_seconds == null ? 'ausstehend' : dur(x.age_seconds) + ' alt');
   $('hash').textContent = unit(scaled(d.hashRate,1000), 'TH/s',2);
   $('hash10m').textContent = fmt(scaled(d.hashRate_10m,1000),2);
@@ -176,6 +183,12 @@ incidentDetail=async id=>{
     draw(id,series.map(([key,name,color])=>({name,color,points:points(key)})),options);
   }
   const stats=incident.pre_stats||{}, maxTemp=stats.temp?.max, maxVr=stats.vrTemp?.max;
+  if(incident.kind==='DEVICE_REBOOT'){
+    const f=incident.facts||{},c=f.correlations||{},source={API:'AxeOS API',LOG:'Log',INFERRED:'abgeleitet',UNKNOWN:'unbekannt'}[f.reset_reason_source]||f.reset_reason_source||'unbekannt';
+    const box=element('div',null,$('incidentDetail'),'detailgrid');
+    for(const [label,value] of [['Reboot erkannt',f.reboot_detected?'Ja':'—'],['Vorherige Uptime',dur(f.previous_uptime_seconds)],['Neue Uptime',dur(f.new_uptime_seconds)],['Gemeldeter Resetgrund',f.reported_reset_reason||'—'],['Reset-Kategorie',f.category||'UNKNOWN'],['Quelle',source],['Vertrauen',f.reset_reason_confidence||'UNKNOWN'],['Korrelationen',(c.observations||[]).map(v=>v.message).join(' · ')||'Keine definierten Vorläufer beobachtet']]){const item=element('div',null,box,'detailbox');element('span',label,item,'sub');element('br',null,item);element('b',value,item);}
+    element('p','Korrelationen beschreiben ausschließlich die zeitliche Nähe. Sie beweisen keine Ursache.',$('incidentDetail'),'sub');
+  }
   element('p','Vorheriges 5-Minuten-Fenster: ASIC max. '+unit(maxTemp,'°C')+' · VR max. '+unit(maxVr,'°C')+'. Lücken und Bootgrenzen werden nicht verbunden.',$('incidentDetail'),'sub');
 };
 
