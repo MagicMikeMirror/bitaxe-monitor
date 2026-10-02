@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.1
+
+- Retry Public Pool polling at the telemetry interval until AxeOS has supplied the miner address after container startup.
+
 ## 1.5.0
 
 - Retain full raw telemetry for 30 days, hourly aggregates for 365 days and daily aggregates indefinitely, independently per device generation.

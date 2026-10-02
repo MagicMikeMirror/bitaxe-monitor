@@ -1291,6 +1291,9 @@ def market_poller():
         try:
             with market_lock:
                 address = miner_address
+            if not address:
+                time.sleep(min(POLL_SECONDS, MARKET_SECONDS))
+                continue
             market_generation = catalog.active() if catalog else None
             try:
                 network = get_json(PUBLIC_POOL_API_URL + "/network")
