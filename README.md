@@ -134,6 +134,9 @@ Health endpoint: `http://localhost:8787/healthz`
 | --- | --- | --- |
 | `BITAXE_API_URL` | `http://192.168.1.100/api/system/info` | AxeOS API endpoint |
 | `POLL_SECONDS` | `10` | Poll interval, minimum 5 seconds |
+| `RAW_RETENTION_DAYS` | `30` | Full-resolution telemetry retention |
+| `HOURLY_RETENTION_DAYS` | `365` | Hourly aggregate retention before conversion to permanent daily values |
+| `RETENTION_INTERVAL_SECONDS` | `86400` | Automatic retention interval; first run waits one complete interval after startup |
 | `DASHBOARD_PORT` | `8787` | Published dashboard port |
 | `POWER_HIGH_W` | `35` | High-power event threshold |
 | `TEMP_HIGH_C` | `75` | High-temperature event threshold |
@@ -162,6 +165,37 @@ Its 1-hour, 24-hour and 7-day values are calculated from the persistent
 SQLite history as time-weighted production averages. Confirmed downtime counts
 as zero; isolated missed polls do not become artificial outages. Until a full
 window is available, the dashboard labels the actual data coverage.
+
+## Data retention
+
+Each device generation retains its own independent database and aggregation
+timeline. Full telemetry is retained for 30 days. Complete hours older than that
+are represented by idempotent min/max/average/count aggregates for hashrate,
+power, input and core voltage, ASIC/VR temperature, fan RPM, frequency, error and
+reject rate, response time and the four domain hashrates. Hourly values older
+than 365 days are rolled into weighted daily aggregates, which have no automatic
+expiry.
+
+The daily job runs in a transaction: it creates/replaces and verifies the target
+aggregates before deleting source rows. A failure rolls back both aggregation and
+deletion. Events, incidents, diagnostics, boot sessions, layouts and device
+catalog data are outside this cleanup. The chart query blends raw, hourly and
+daily tiers and prefers the most detailed available tier.
+
+Schema version 5 adds `telemetry_aggregates`. Before applying it, startup creates
+an integrity-checked online backup for every affected generation plus the
+generation catalog under `/data/backups/migration-v5-*`. Restore the complete
+data directory while the monitor is stopped so the catalog, identity key and all
+generation databases remain coherent.
+
+The former full JSON payload repeats many unchanged AxeOS fields every ten
+seconds and is the main storage cost; WAL files may temporarily add to the visible
+size. It remains unchanged for backward compatibility. At roughly 16 MiB per
+4,000 observations, a continuously sampled 30-day raw tier can approach about
+1 GiB per active generation before filesystem/WAL variance. Hourly history is
+typically only a few megabytes per year and permanent daily history grows very
+slowly. Routine cleanup does not run `VACUUM`; reusable SQLite pages are reported
+separately and reused by later writes.
 
 ## Dashboard layouts
 
@@ -223,11 +257,11 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.4.0` from source or
+Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.5.0` from source or
 use its published image when available, and recreate the container. The sample
-table gains a separate row ID so duplicate timestamps cannot overwrite telemetry.
-Existing sample timestamps/payloads, incidents and layouts are preserved. Startup
-does not bind a new device or create its history.
+table and existing history remain unchanged; schema version 5 only adds the
+aggregate table. Startup creates verified pre-migration backups and does not bind
+a new device or create its history.
 
 ## Supported AxeOS versions
 

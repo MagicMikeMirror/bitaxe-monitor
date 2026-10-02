@@ -214,5 +214,9 @@ async function refreshAll() {
   catch(error){generationNotice.textContent='Aktualisierung fehlgeschlagen: '+error.message;}
 }
 setupLayouts();refreshAll();market();
-json('/api/storage').then(s=>{storageNotice.textContent=`${s.samples.toLocaleString('de-DE')} Messwerte · ${(s.bytes/1048576).toFixed(1)} MiB · keine automatische Löschung`;}).catch(()=>{});
+json('/api/storage').then(s=>{
+  const oldest=s.started_at?new Date(s.started_at*1000).toLocaleDateString('de-DE'):'—';
+  const last=s.last_retention_at?new Date(s.last_retention_at*1000).toLocaleString('de-DE'):'noch nicht ausgeführt';
+  storageNotice.textContent=`${s.samples.toLocaleString('de-DE')} Rohmesswerte · ${(s.bytes/1048576).toFixed(1)} MiB · ältester Rohwert ${oldest} · Rohdaten ${s.raw_retention_days} Tage · Stundenwerte ${s.hourly_retention_days} Tage · Tageswerte dauerhaft · letzter Retention-Lauf ${last}`;
+}).catch(()=>{});
 setInterval(refreshAll,REFRESH_MS);setInterval(refreshClock,1000);setInterval(market,60000);
