@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.1
+
+- Idempotently link legacy uptime-confirmed `REBOOT` events to reconstructed `DEVICE_REBOOT` incidents so existing active-generation reboot history appears in the new statistics without changing telemetry.
+
 ## 1.6.0
 
 - Record every uptime-confirmed reboot as a separate `DEVICE_REBOOT` incident with the raw AxeOS `resetReason`, evidence source and confidence.

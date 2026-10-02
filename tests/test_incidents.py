@@ -469,6 +469,34 @@ class IncidentClassificationTests(unittest.TestCase):
             finally:
                 APP.DB_PATH = original
 
+    def test_legacy_reboot_event_is_idempotently_linked_to_diagnostic_incident(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "metrics.sqlite3")
+            try:
+                APP.init_db()
+                APP.save({"uptimeSeconds": 5000, "hashRate": 1480, "power": 24,
+                          "voltage": 5000}, 990)
+                APP.add_event("REBOOT", "warning",
+                              "Neustart erkannt: Software reset due to exception/panic", 1000)
+                APP.save({"uptimeSeconds": 5, "hashRate": 1400, "power": 23,
+                          "voltage": 5000,
+                          "resetReason": "Software reset due to exception/panic"}, 1000)
+                APP.backfill_legacy_reboots()
+                APP.backfill_legacy_reboots()
+                with APP.db() as con:
+                    incident = con.execute("SELECT kind,facts FROM incidents").fetchall()
+                    event = con.execute("SELECT kind,incident_id,message FROM events").fetchone()
+                self.assertEqual(len(incident), 1)
+                self.assertEqual(event["kind"], "DEVICE_REBOOT")
+                self.assertIsNotNone(event["incident_id"])
+                self.assertIn("exception/panic", event["message"])
+                facts = json.loads(incident[0]["facts"])
+                self.assertTrue(facts["historical_reconstruction"])
+                self.assertEqual(facts["reset_reason_confidence"], "REPORTED")
+            finally:
+                APP.DB_PATH = original
+
     def test_c_short_api_outage_without_reboot_is_network_outage(self):
         before = {"uptimeSeconds": 3600}
         after = {"uptimeSeconds": 3650, "resetReason": "Reset due to power-on event"}
