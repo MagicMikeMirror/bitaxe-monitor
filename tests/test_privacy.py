@@ -67,6 +67,42 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual(APP.mining_address(raw), "bc1q-test-address")
         self.assertNotIn("stratumUser", APP.clean(raw))
 
+    def test_known_pool_host_is_parsed_without_persisting_it(self):
+        raw = {"stratumURL": "stratum+tcp://stratum.btcpowlab-pool.com:3333"}
+        self.assertEqual(APP.mining_pool(raw), "stratum.btcpowlab-pool.com")
+        self.assertNotIn("stratumURL", APP.clean(raw))
+
+    def test_btc_pow_lab_statistics_are_adapted(self):
+        payload = {
+            "hashrate_5m_hs": 500_000_000_000,
+            "best_share_difficulty": 123456,
+            "last_share_at": 1790532923,
+            "workers": [{
+                "name": "rig",
+                "hashrate_5m_hs": 500_000_000_000,
+                "last_share_at": 1790532923,
+            }],
+        }
+        requested = []
+        def fetch(url):
+            requested.append(url)
+            return payload
+        result = APP.pool_miner_stats(
+            "stratum.btcpowlab-pool.com", "bc1q-test", fetch)
+        self.assertEqual(result["poolLabel"], "BTC PoW Lab")
+        self.assertEqual(requested, [
+            "https://btcpowlab-pool.com/public/v1/miner/bc1q-test/summary"])
+        self.assertEqual(result["hashRate"], 500_000_000_000)
+        self.assertEqual(result["bestDifficulty"], 123456)
+        self.assertEqual(result["workers"][0]["name"], "rig")
+        self.assertTrue(result["lastSeen"].endswith("+00:00"))
+
+    def test_unknown_pool_does_not_query_public_pool(self):
+        called = []
+        result = APP.pool_miner_stats("private.pool.example", "bc1q-test", called.append)
+        self.assertEqual(result, {"poolLabel": None, "workers": []})
+        self.assertEqual(called, [])
+
     def test_sensitive_api_fields_are_discarded(self):
         raw = {
             "power": 21.5,

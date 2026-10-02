@@ -54,6 +54,7 @@ market_cache = {"updated": None, "btc_eur": None, "block_btc": None, "price_hist
                 "miner": {}, "network": {}}
 market_lock = threading.Lock()
 miner_address = None
+miner_pool_host = None
 hashrate_cache = {"updated": 0, "data": {}}
 hashrate_lock = threading.Lock()
 generation_lock = threading.RLock()
@@ -141,7 +142,7 @@ body select option{background:#1c1c1e;color:#f5f5f7}
 <div class="card" style="grid-column:1/-1"><div class="healthhead"><div class="label">Health & Gerätestatus</div><label class="autoswitch" title="Automatischen AxeOS-Neustart bei anhaltendem Hashrate-Einbruch ein- oder ausschalten"><input id="autoRestartToggle" type="checkbox" disabled><span class="switchtrack"></span><span>Auto-Restart</span><span class="switchstate" id="autoRestartState">—</span></label></div><div class="value" id="health" style="font-size:20px">—</div><div class="sub" id="healthText">—</div><div class="healthdetails" id="healthDetails"></div></div>
 <div class="card wide"><div class="label">Mining-Profil</div><div class="value" id="profileActive" style="font-size:24px">—</div><div class="sub" id="profileCurrent">Frequenz · Spannung · Kühlung</div><div class="tabs" id="profileButtons" style="margin-top:12px"><button data-profile="eco">Eco</button><button data-profile="standard">Standard</button><button data-profile="oc">OC</button><button data-profile="performance">Performance</button></div><div class="sub" id="profileHint">Alle Profile verwenden feste 100 % Lüfterleistung – ohne Neustart.</div></div>
 <div class="card wide"><div class="label">Bitcoin & Blockwert</div><div class="value" id="btcEur">—</div><div class="sub"><span id="priceUpdated">Aktueller BTC/EUR-Kurs</span> · <span class="pricechange" id="priceChange">24h —</span></div><div class="pricechart"><canvas id="btcPriceChart"></canvas></div><div class="facts"><div class="fact" title="Neu erzeugte Bitcoin pro Block gemäß aktuellem Halving-Zyklus."><span class="sub">Block-Subvention</span><b id="blockSubsidy">— BTC</b></div><div class="fact" title="Gebühren der Transaktionen im aktuellen Blocktemplate. Sie kommen zusätzlich zur Block-Subvention hinzu."><span class="sub">Transaktionsgebühren</span><b id="blockFees">—</b></div><div class="fact" title="Der aktuell deiner Mining-Adresse zugewiesene Coinbase-Wert inklusive Transaktionsgebühren."><span class="sub" id="blockValueLabel">Aktueller Blockwert</span><b id="blockBtc">— BTC</b><span class="sub" id="blockEur">—</span></div></div><div class="sub">Blockhöhe <span id="blockHeight">—</span></div></div>
-<div class="card wide"><div class="label">Mein Public-Pool-Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
+<div class="card wide"><div class="label">Mein <span id="minerPool">Pool</span> Miner</div><div class="value" id="minerHash">—</div><div class="sub" id="minerName">Worker —</div><div class="facts poolfacts"><div class="fact"><span class="sub">Best Difficulty</span><b id="minerBest">—</b></div><div class="fact"><span class="sub">Worker</span><b id="minerWorkers">—</b></div><div class="fact"><span class="sub">Solo Work</span><b id="minerWork">—</b></div><div class="fact"><span class="sub">Last Seen</span><b id="minerSeen">—</b></div></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Hashrate</div><div class="sub">GH/s</div></div><div class="tabs" data-chart="hashrate"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="chart"><canvas id="hashrate"></canvas></div></div>
 <div class="card wide"><div class="top"><div><div class="label">Leistung & Temperatur</div><div class="legend"><span><i class="key asic"></i>ASIC °C</span><span><i class="key vr"></i>VR °C</span><span><i class="key power"></i>Leistung W</span><span><i class="key voltage"></i>Input V separat in Diagnose</span></div></div><div class="tabs" data-chart="thermal"><button data-r="1h" class="active">1h</button><button data-r="24h">24h</button><button data-r="7d">7d</button></div></div><div class="dual"><div class="mini"><canvas id="temperature"></canvas></div><div class="mini"><canvas id="powerchart"></canvas></div></div></div>
 <div class="card wide"><div class="label">Incidents</div><div class="events" id="incidents"></div></div><div class="card wide"><div class="label">Ereignisse</div><div class="events" id="events"></div></div></section></main><dialog id="incidentDialog"><button class="closebtn" onclick="$('incidentDialog').close()">Schließen</button><div id="incidentDetail"></div></dialog>
@@ -152,7 +153,7 @@ new MutationObserver(()=>{$('dot').classList.toggle('pause',$('state').textConte
 const REFRESH_MS=10000;let lastRefreshAt=0,nextRefreshAt=0;function markRefresh(){lastRefreshAt=Date.now();nextRefreshAt=lastRefreshAt+REFRESH_MS;refreshClock()}function refreshClock(){if(!lastRefreshAt){$('seen').textContent='Refresh —';return}let next=Math.max(0,Math.ceil((nextRefreshAt-Date.now())/1000)),stamp=new Date(lastRefreshAt).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'});$('seen').textContent='Refresh '+stamp+' · nächster in '+next+'s'}
 const coverage=(pct,seconds)=>pct==null?'':fmt(pct,0)+'%';
 const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR',maximumFractionDigits:0}).format(v), rate=v=>{if(v==null)return'—';if(v>=1e18)return(v/1e18).toFixed(2)+' EH/s';if(v>=1e15)return(v/1e15).toFixed(2)+' PH/s';if(v>=1e12)return(v/1e12).toFixed(2)+' TH/s';return diff(v)+' H/s'};
-async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
+async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerPool').textContent=m.poolLabel||'Pool';$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
 const chartState={};function axisLabel(ts,range){let d=new Date(ts*1000);return range==='7d'?d.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'}):d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
 function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).filter(m=>m.planned&&m.ended_at).forEach(m=>{ctx.fillStyle='#57a6ff22';ctx.fillRect(px(Math.max(opt.start,m.ts)),top,Math.max(2,px(Math.min(opt.end,m.ended_at))-px(Math.max(opt.start,m.ts))),h-top-bottom)});(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.planned?'#57a6ff':(m.automatic?'#ffc857':'#ff5964');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
 async function incidentDetail(id){
@@ -1164,10 +1165,61 @@ def mining_address(raw):
     return value if value.startswith(("bc1", "1", "3")) else None
 
 
+def mining_pool(raw):
+    value = str(raw.get("stratumURL") or "").strip()
+    if not value:
+        return None
+    parsed = urlparse(value if "://" in value else "stratum+tcp://" + value)
+    return (parsed.hostname or "").lower() or None
+
+
 def get_json(url):
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "BitaxeMonitor/1.0"})
     with urllib.request.urlopen(req, timeout=10) as res:
         return json.load(res)
+
+
+def pool_miner_stats(host, address, fetch=get_json):
+    """Fetch known pool statistics without exposing the wallet or pool URL downstream."""
+    if not host or not address:
+        return {"poolLabel": None, "workers": []}
+    if host == "public-pool.io":
+        client = fetch(PUBLIC_POOL_API_URL + "/client/" + quote(address, safe=""))
+        workers = [{k: w.get(k) for k in ("name", "payoutMode", "bestDifficulty", "hashRate", "startTime", "lastSeen")}
+                   for w in (client.get("workers") or [])]
+        accounting = client.get("accounting") or {}
+        return {
+            "poolLabel": "Public Pool",
+            "bestDifficulty": accounting.get("bestSubmissionDifficulty") or client.get("bestDifficulty"),
+            "workersCount": client.get("workersCount"),
+            "hashRate": sum((w.get("hashRate") or 0) for w in workers) if workers else None,
+            "soloWork": accounting.get("workSinceLastBlock"),
+            "lastSeen": accounting.get("latestShareAt") or (workers[0].get("lastSeen") if workers else None),
+            "workers": workers,
+        }
+    if host == "stratum.btcpowlab-pool.com":
+        client = fetch("https://btcpowlab-pool.com/public/v1/miner/" + quote(address, safe="") + "/summary")
+        workers = [{
+            "name": w.get("name"),
+            "payoutMode": "hybrid solo",
+            "bestDifficulty": w.get("best_share_difficulty"),
+            "hashRate": w.get("hashrate_5m_hs"),
+            "startTime": None,
+            "lastSeen": (datetime.fromtimestamp(float(w["last_share_at"]), timezone.utc).isoformat()
+                         if w.get("last_share_at") else None),
+        } for w in (client.get("workers") or [])]
+        last_share = client.get("last_share_at")
+        return {
+            "poolLabel": "BTC PoW Lab",
+            "bestDifficulty": client.get("best_share_difficulty"),
+            "workersCount": len(workers),
+            "hashRate": client.get("hashrate_5m_hs"),
+            "soloWork": None,
+            "lastSeen": (datetime.fromtimestamp(float(last_share), timezone.utc).isoformat()
+                         if last_share else (workers[0].get("lastSeen") if workers else None)),
+            "workers": workers,
+        }
+    return {"poolLabel": None, "workers": []}
 
 
 def block_subsidy(height):
@@ -1495,6 +1547,7 @@ def market_poller():
         try:
             with market_lock:
                 address = miner_address
+                pool_host = miner_pool_host
             if not address:
                 time.sleep(min(POLL_SECONDS, MARKET_SECONDS))
                 continue
@@ -1510,20 +1563,9 @@ def market_poller():
             except Exception:
                 candles = []
             try:
-                client = get_json(PUBLIC_POOL_API_URL + "/client/" + quote(address, safe="")) if address else {}
-            except (OSError, ValueError):
-                client = {}
-            workers = [{k: w.get(k) for k in ("name", "payoutMode", "bestDifficulty", "hashRate", "startTime", "lastSeen")}
-                       for w in (client.get("workers") or [])]
-            accounting = client.get("accounting") or {}
-            safe_miner = {
-                "bestDifficulty": accounting.get("bestSubmissionDifficulty") or client.get("bestDifficulty"),
-                "workersCount": client.get("workersCount"),
-                "hashRate": sum((w.get("hashRate") or 0) for w in workers) if workers else None,
-                "soloWork": accounting.get("workSinceLastBlock"),
-                "lastSeen": accounting.get("latestShareAt") or (workers[0].get("lastSeen") if workers else None),
-                "workers": workers,
-            }
+                safe_miner = pool_miner_stats(pool_host, address)
+            except (OSError, ValueError, TypeError, OverflowError):
+                safe_miner = {"poolLabel": None, "workers": []}
             safe_network = {
                 "blocks": network.get("blocks"),
                 "difficulty": network.get("difficulty"),
@@ -1852,7 +1894,7 @@ def save(data, ts):
 
 
 def poll_generation():
-    global miner_address
+    global miner_address, miner_pool_host
     failures = successes = stopped_polls = 0
     state = "ONLINE"
     incident_id = None
@@ -1900,9 +1942,10 @@ def poll_generation():
                 if catalog and not catalog.observe(raw, clean(raw)):
                     raise IdentityPending('Gerätezuordnung erforderlich')
                 address = mining_address(raw)
-                if address:
-                    with market_lock:
-                        miner_address = address
+                pool_host = mining_pool(raw)
+                with market_lock:
+                    miner_address = address
+                    miner_pool_host = pool_host
                 data = clean(raw)
                 old = previous()
                 stamp = now()
@@ -2490,7 +2533,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({'error': 'Vorgang fehlgeschlagen; bestehende Historie bleibt erhalten'}, 503)
 
     def write_request(self):
-        global miner_address
+        global miner_address, miner_pool_host
         path = urlparse(self.path).path
         pause_match = re.fullmatch(r"/api/incidents/(\d+)/confirm-user-pause", path)
         if path not in {"/api/settings/auto-restart", "/api/settings/mining-profile", "/api/layouts", '/api/generations/switch', '/api/backup'} and not pause_match:
@@ -2517,6 +2560,7 @@ class Handler(BaseHTTPRequestHandler):
             hashrate_cache.update({'updated': 0, 'data': {}})
             with market_lock:
                 miner_address = None
+                miner_pool_host = None
                 market_cache['miner'] = {}
             return self.send_json({'active': generation})
         if pause_match:
