@@ -170,6 +170,19 @@ class GenerationTests(unittest.TestCase):
         incomplete = domain_stability(self.domain_samples(lambda _: [250, 250, 250]), 900)
         self.assertEqual(incomplete['status'], 'UNKNOWN')
 
+    def test_domain_stability_warns_when_all_domains_are_zero(self):
+        result = domain_stability(self.domain_samples(lambda _: [0, 0, 0, 0]), 900)
+        self.assertEqual(result['status'], 'WARNING')
+        self.assertEqual((result['active_domains'], result['stable_domains']), (0, 0))
+        self.assertIsNone(result['windows']['15m']['deviations_pct'])
+        self.assertIsNone(result['windows']['15m']['weakest_domain'])
+
+    def test_domain_stability_warns_when_all_domains_stop_in_last_five_minutes(self):
+        result = domain_stability(self.domain_samples(
+            lambda stamp: [0, 0, 0, 0] if stamp >= 600 else [250, 250, 250, 250]), 900)
+        self.assertEqual(result['status'], 'WARNING')
+        self.assertIsNone(result['windows']['5m']['deviations_pct'])
+
     def test_missing_identity_blocks_switch(self):
         catalog = self.catalog()
         with self.assertRaises(ValueError):

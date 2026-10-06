@@ -11,6 +11,24 @@ SPEC.loader.exec_module(APP)
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_clean_discards_malformed_asic_lists(self):
+        for value in (None, 1, True, 'invalid', {'domains': [250]}):
+            with self.subTest(value=value):
+                sample = APP.clean({'hashRate': 1000, 'hashrateMonitor': {'asics': value}})
+                self.assertEqual(sample['hashRate'], 1000)
+                self.assertEqual(sample['hashrateMonitor']['asics'], [])
+
+    def test_clean_discards_malformed_domains_without_losing_other_asic_data(self):
+        for value in (None, 1, True, 'invalid', {'private': 'discard'}):
+            with self.subTest(value=value):
+                sample = APP.clean({'hashrateMonitor': {'asics': [
+                    {'total': 1000, 'errorCount': 12, 'domains': value},
+                    {'domains': [250, None, 250, 0]},
+                ]}})
+                self.assertEqual(sample['hashrateMonitor']['asics'][0],
+                                 {'total': 1000, 'errorCount': 12, 'domains': []})
+                self.assertEqual(sample['hashrateMonitor']['asics'][1]['domains'], [250, None, 250, 0])
+
     def test_block_subsidy_follows_halvings(self):
         self.assertEqual(APP.block_subsidy(839999), 6.25)
         self.assertEqual(APP.block_subsidy(840000), 3.125)

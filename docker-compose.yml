@@ -2,7 +2,7 @@ name: bitaxe-monitor
 
 services:
   bitaxe-monitor:
-    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.7.1
+    image: ghcr.io/magicmikemirror/bitaxe-monitor:1.7.2
     build: .
     container_name: bitaxe-monitor
     restart: unless-stopped
@@ -63,12 +63,12 @@ x-casaos:
   developer: Bitaxe Monitor contributors
   category: Finance
   architectures: [amd64, arm64]
-  version: "1.7.1"
+  version: "1.7.2"
   update_at: "2026-10-06"
   website: https://github.com/MagicMikeMirror/bitaxe-monitor
   repo: https://github.com/MagicMikeMirror/bitaxe-monitor
   support: https://github.com/MagicMikeMirror/bitaxe-monitor/issues
   docs: https://github.com/MagicMikeMirror/bitaxe-monitor#readme
   release_notes:
-    en_US: Restores historical diagnostic event details without changing stored monitoring data.
-    de_DE: Stellt die Detailansicht historischer Diagnoseereignisse wieder her, ohne gespeicherte Monitoring-Daten zu verändern.
+    en_US: Fixes zero-domain diagnostics, malformed telemetry lists and weakest-domain numbering.
+    de_DE: Behebt Diagnoseabbrüche bei Null-Domains, ungültige Telemetrie-Listen und die Nummerierung der schwächsten Domain.

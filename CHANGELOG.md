@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.2
+
+- Report a warning instead of failing diagnostics when all four domain values are zero despite a positive total hashrate.
+- Discard malformed ASIC/domain lists without interrupting telemetry collection.
+- Match the weakest-domain label to the chart's domain numbering (1–4).
+
 ## 1.7.1
 
 - Restore the existing diagnostic detail view for historical domain-stall and other supported diagnostic events without modifying stored incidents, events or telemetry.

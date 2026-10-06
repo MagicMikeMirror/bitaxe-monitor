@@ -1126,10 +1126,12 @@ def clean(raw):
     if not isinstance(monitor, dict):
         monitor = {}
     safe_asics = []
-    for asic in (monitor.get("asics") or [])[:32]:
+    asics = monitor.get("asics")
+    for asic in (asics if isinstance(asics, list) else [])[:32]:
         if not isinstance(asic, dict):
             continue
-        domains = [number(value) for value in (asic.get("domains") or [])[:64]]
+        raw_domains = asic.get("domains")
+        domains = [number(value) for value in (raw_domains if isinstance(raw_domains, list) else [])[:64]]
         safe_asics.append({"total": number(asic.get("total")), "errorCount": number(asic.get("errorCount")),
                            "domains": domains})
     data["hashrateMonitor"] = {"asics": safe_asics}

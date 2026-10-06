@@ -91,8 +91,10 @@ def domain_stability(samples, end, max_gap=30):
         active = stable = None
     else:
         active = sum(value > 1 for value in fifteen['averages'])
-        stable = sum(value > 1 and deviation > DOMAIN_WATCH_15M_PCT
-                     for value, deviation in zip(fifteen['averages'], fifteen['deviations_pct']))
+        deviations = fifteen['deviations_pct']
+        stable = (sum(value > 1 and deviation > DOMAIN_WATCH_15M_PCT
+                      for value, deviation in zip(fifteen['averages'], deviations))
+                  if deviations is not None else 0)
         weakest_15 = fifteen['weakest_deviation_pct']
         weakest_5 = five['weakest_deviation_pct']
         five_minute_dead = (five['coverage_seconds'] >= 300 * DOMAIN_MIN_COVERAGE
