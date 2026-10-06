@@ -40,6 +40,86 @@ def domains(data):
     return [number(v) for v in (asics[0].get('domains') or [])] if asics else []
 
 
+# Monitor thresholds, not vendor specifications. On the deployed Gamma 601 the
+# observed healthy baseline was -3.2% (5m) and -1.35% (15m) for the weakest
+# domain. These deliberately wider bands avoid reacting to normal BM1370 jitter.
+DOMAIN_WATCH_5M_PCT = -12.0
+DOMAIN_WATCH_15M_PCT = -8.0
+DOMAIN_WARNING_15M_PCT = -15.0
+DOMAIN_MIN_COVERAGE = 0.75
+
+
+def _domain_window(samples, end, seconds, max_gap):
+    start = end - seconds
+    totals, covered = [0.0] * 4, 0.0
+    for before, after in zip(samples, samples[1:]):
+        interval = after['ts'] - before['ts']
+        duration = min(end, after['ts']) - max(start, before['ts'])
+        values = domains(before)
+        if (duration <= 0 or not continuous(before, after, interval, max_gap)
+                or len(values) != 4 or any(value is None or value < 0 for value in values)):
+            continue
+        for index, value in enumerate(values):
+            totals[index] += value * duration
+        covered += duration
+    if covered <= 0:
+        return {'seconds': seconds, 'coverage_seconds': 0, 'coverage_pct': 0,
+                'averages': None, 'deviations_pct': None,
+                'weakest_domain': None, 'weakest_deviation_pct': None,
+                'max_downward_pct': None}
+    averages = [total / covered for total in totals]
+    common = statistics.mean(averages)
+    deviations = [100 * (value - common) / common for value in averages] if common > 0 else None
+    weakest = min(range(4), key=lambda index: deviations[index]) if deviations else None
+    return {'seconds': seconds, 'coverage_seconds': covered,
+            'coverage_pct': min(100.0, covered * 100 / seconds),
+            'averages': averages, 'deviations_pct': deviations,
+            'weakest_domain': weakest,
+            'weakest_deviation_pct': deviations[weakest] if weakest is not None else None,
+            'max_downward_pct': -deviations[weakest] if weakest is not None else None}
+
+
+def domain_stability(samples, end, max_gap=30):
+    """Time-based four-domain assessment; a single raw sample never sets status."""
+    windows = {label: _domain_window(samples, end, seconds, max_gap)
+               for label, seconds in (('5m', 300), ('15m', 900))}
+    five, fifteen = windows['5m'], windows['15m']
+    required_coverage = 900 * DOMAIN_MIN_COVERAGE
+    if (not fifteen['averages'] or fifteen['coverage_seconds'] < required_coverage
+            or len(fifteen['averages']) != 4):
+        status, reason = 'UNKNOWN', 'Unvollständige 15-Minuten-Daten'
+        active = stable = None
+    else:
+        active = sum(value > 1 for value in fifteen['averages'])
+        stable = sum(value > 1 and deviation > DOMAIN_WATCH_15M_PCT
+                     for value, deviation in zip(fifteen['averages'], fifteen['deviations_pct']))
+        weakest_15 = fifteen['weakest_deviation_pct']
+        weakest_5 = five['weakest_deviation_pct']
+        five_minute_dead = (five['coverage_seconds'] >= 300 * DOMAIN_MIN_COVERAGE
+                            and any(value <= 1 for value in five['averages']))
+        if active < 4 or five_minute_dead:
+            status, reason = 'WARNING', 'Mindestens eine Domain liefert dauerhaft kaum oder keine Hashrate'
+        elif weakest_15 <= DOMAIN_WARNING_15M_PCT:
+            status, reason = 'WARNING', 'Eine Domain liegt über 15 Minuten deutlich zurück'
+        elif weakest_15 <= DOMAIN_WATCH_15M_PCT:
+            status, reason = 'WATCH', 'Beginnende persistente Unterperformance im 15-Minuten-Mittel'
+        elif (five['coverage_seconds'] >= 300 * DOMAIN_MIN_COVERAGE
+              and weakest_5 <= DOMAIN_WATCH_5M_PCT):
+            status, reason = 'WATCH', 'Kurzfristige Unterperformance im 5-Minuten-Mittel'
+        else:
+            status, reason = 'PASS', 'Alle vier Domains im Zeitmittel stabil'
+    latest = samples[-1] if samples else {}
+    actual, expected = number(latest.get('hashRate')), number(latest.get('expectedHashrate'))
+    return {'status': status, 'reason': reason, 'windows': windows,
+            'active_domains': active, 'stable_domains': stable, 'domain_count': 4,
+            'actual_expected_pct': (actual * 100 / expected if actual is not None and expected and expected > 0 else None),
+            'asic_error_pct': number(latest.get('errorPercentage')),
+            'thresholds': {'watch_5m_pct': DOMAIN_WATCH_5M_PCT,
+                           'watch_15m_pct': DOMAIN_WATCH_15M_PCT,
+                           'warning_15m_pct': DOMAIN_WARNING_15M_PCT,
+                           'minimum_coverage_pct': DOMAIN_MIN_COVERAGE * 100}}
+
+
 def errors(data):
     asics = (data.get('hashrateMonitor') or {}).get('asics') or []
     return number(asics[0].get('errorCount')) if asics else None
