@@ -167,9 +167,9 @@ profileStatus=async()=>{await previousProfileStatus();document.querySelectorAll(
 const previousMarket=market;
 market=async()=>{await previousMarket();$('minerName').textContent+=' · externe Pool-/Worker-Historie, unabhängig von Gerätegeneration';};
 const previousIncidentDetail=incidentDetail;
-incidentDetail=async id=>{
-  await previousIncidentDetail(id);
-  const incident=await json('/api/incidents/'+id), samples=incident.samples||[], w=incident.window;
+incidentDetail=async (id,url)=>{
+  await previousIncidentDetail(id,url);
+  const incident=await json(url||'/api/incidents/'+id), samples=incident.samples||[], w=incident.window;
   const host=$('incidentDetail').querySelector('.incidentcharts');
   const points=key=>samples.map((sample,index)=>({ts:sample.ts,v:sample[key],gap:index>0&&(sample.ts-samples[index-1].ts>30||sample.bootSession!==samples[index-1].bootSession)}));
   const options={start:w.start,end:w.end,range:'1h',decimals:0,markers:[{ts:incident.started_at,kind:'Erkennung',description:'Vorfall erkannt'}]};
@@ -212,10 +212,10 @@ events = async () => {
 incidents = async () => {
   const rows=await json('/api/timeline'), host=$('incidents');host.replaceChildren();
   for (const row of rows.filter(row=>timelineFilter.value==='all'||(timelineFilter.value==='incidents'?row.source==='incident':row.kind!=='REJECTED_SHARE'))) {
-    const item=element('div',null,host,'event'+(row.source==='incident'?' clickable':''));
+    const item=element('div',null,host,'event'+(row.detail_url?' clickable':''));
     element('span',new Date(row.ts*1000).toLocaleString('de-DE'),item);
     element('b',row.kind,item,'sev-'+row.severity);element('span',row.message,item);
-    if(row.source==='incident')item.onclick=()=>incidentDetail(row.id);
+    if(row.detail_url)item.onclick=()=>incidentDetail(row.id,row.detail_url);
   }
   if(!host.children.length)element('p','Keine Ereignisse in dieser Ansicht',host,'sub');
 };

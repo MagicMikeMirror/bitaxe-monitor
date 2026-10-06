@@ -107,6 +107,66 @@ class IncidentClassificationTests(unittest.TestCase):
         self.assertIn("ASIC_DOMAIN_STALL_DETECTED", source)
         self.assertNotIn("ASIC_DOMAIN_STALL_DETECASIC", source)
 
+    def test_existing_diagnostic_event_opens_read_only_historical_detail(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+            original = APP.DB_PATH
+            APP.DB_PATH = str(pathlib.Path(directory) / "event-detail.sqlite3")
+            try:
+                APP.init_db()
+                stamp = 10_000
+                healthy = {"hashRate": 1538, "power": 24.2, "voltage": 5030,
+                           "temp": 58.1, "vrTemp": 61.2, "coreVoltageActual": 1180,
+                           "actualFrequency": 650, "errorPercentage": 0.1,
+                           "uptimeSeconds": 7200, "hashrateMonitor": {"asics": [{
+                               "errorCount": 970, "domains": [385, 383, 386, 384]}]}}
+                stalled = healthy | {"hashRate": 356, "power": 20.1, "voltage": 4980,
+                                     "temp": 55.0, "vrTemp": 58.0,
+                                     "hashrateMonitor": {"asics": [{"errorCount": 979,
+                                         "domains": [356, 0, 0, 0]}]}}
+                APP.save(healthy, stamp - 20)
+                APP.save(stalled, stamp)
+                event_id = APP.add_event("ASIC_DOMAIN_STALL_DETECTED", "warning",
+                                         "3 von 4 Domains ohne Hashrate", stamp,
+                                         details={"baseline": 1538})
+                APP.save(healthy | {"uptimeSeconds": 7220}, stamp + 20)
+                with APP.db() as con:
+                    counts_before = (con.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                                     con.execute("SELECT COUNT(*) FROM incidents").fetchone()[0],
+                                     con.execute("SELECT COUNT(*) FROM samples").fetchone()[0])
+
+                detail = APP.event_detail_payload(event_id)
+
+                self.assertEqual(APP.timeline_detail_url(
+                    "event", "ASIC_DOMAIN_STALL_DETECTED", event_id), f"/api/events/{event_id}")
+                self.assertEqual(APP.timeline_detail_url("incident", "UNKNOWN", 7),
+                                 "/api/incidents/7")
+                self.assertIsNone(APP.timeline_detail_url("event", "REJECTED_SHARE", event_id))
+                self.assertEqual(detail["kind"], "ASIC_DOMAIN_STALL_DETECTED")
+                self.assertEqual(detail["window"], {"start": stamp - 300, "end": stamp + 300})
+                self.assertEqual([sample["ts"] for sample in detail["samples"]],
+                                 [stamp - 20, stamp, stamp + 20])
+                observed = detail["before_sample"]
+                for field in ("voltage", "coreVoltageActual", "power", "temp", "vrTemp",
+                              "hashRate", "errorPercentage", "hashrateMonitor"):
+                    self.assertIn(field, observed)
+                self.assertEqual(observed["hashrateMonitor"]["asics"][0]["domains"],
+                                 [356, 0, 0, 0])
+                with APP.db() as con:
+                    counts_after = (con.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                                    con.execute("SELECT COUNT(*) FROM incidents").fetchone()[0],
+                                    con.execute("SELECT COUNT(*) FROM samples").fetchone()[0])
+                    stored = con.execute("SELECT kind,message FROM events WHERE id=?",
+                                         (event_id,)).fetchone()
+                self.assertEqual(counts_after, counts_before)
+                self.assertEqual((stored["kind"], stored["message"]),
+                                 ("ASIC_DOMAIN_STALL_DETECTED", "3 von 4 Domains ohne Hashrate"))
+
+                frontend = (ROOT / "dashboard.js").read_text(encoding="utf-8")
+                self.assertIn("row.detail_url?' clickable'", frontend)
+                self.assertIn("incidentDetail(row.id,row.detail_url)", frontend)
+            finally:
+                APP.DB_PATH = original
+
     def test_auto_restart_detects_safe_partial_hashrate_loss(self):
         original = APP.AUTO_RESTART_MIN_UPTIME
         APP.AUTO_RESTART_MIN_UPTIME = 900

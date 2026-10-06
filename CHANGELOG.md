@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.1
+
+- Restore the existing diagnostic detail view for historical domain-stall and other supported diagnostic events without modifying stored incidents, events or telemetry.
+
 ## 1.7.0
 
 - Replace the single-sample BM1370 domain imbalance with time-weighted 5/15-minute domain stability, conservative PASS/WATCH/WARNING/UNKNOWN assessment and weakest-domain context while retaining the existing chart.

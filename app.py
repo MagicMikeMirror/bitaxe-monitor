@@ -93,6 +93,14 @@ INCIDENT_KINDS = {
     "DEVICE_REBOOT", "SYSTEM_RESET", "UNKNOWN"
 }
 
+DIAGNOSTIC_EVENT_KINDS = {
+    "ASIC_DOMAIN_STALL_DETECTED", "HASHRATE_DROP_DETECTED", "DOMAIN_WARNING",
+    "POWER_FAULT", "OFFLINE", "REBOOT", "DEVICE_REBOOT", "ONLINE_RESTORED",
+    "POOL_OR_STRATUM_ISSUE", "THERMAL_EVENT", "OVERHEAT", "FAN_WARNING",
+    "FALLBACK_POOL", "POWER", "TEMPERATURE", "AUTO_RECOVERY_SUPPRESSED",
+    "AUTO_RESTART_FAILED",
+}
+
 LAYOUT_WIDGETS = (
     "hashrate", "power", "temperatures", "shares", "pool", "uptime", "health",
     "mining-profile", "bitcoin", "public-pool", "hashrate-chart", "thermal-chart", "incidents", "events"
@@ -155,8 +163,8 @@ const eur=v=>v==null?'—':new Intl.NumberFormat('de-DE',{style:'currency',curre
 async function market(){let r=await fetch('/api/market'),x=await r.json(),m=x.miner||{},w=m.workers?.[0]||{},p=x.price_history||[],b=x.block_value||{},chg=x.price_change_pct,color=(chg??0)>=0?'#40e0a0':'#ff5964';$('blockSubsidy').textContent=b.subsidy_btc==null?'— BTC':Number(b.subsidy_btc).toFixed(4)+' BTC';$('blockFees').textContent=b.fees_btc==null?'nicht verfügbar':Number(b.fees_btc).toFixed(8)+' BTC';$('blockBtc').textContent=b.miner_btc==null?'— BTC':Number(b.miner_btc).toFixed(b.coinbase_available?8:4)+' BTC';$('blockValueLabel').textContent=b.coinbase_available?'Aktueller Blockwert':'Blockwert ohne aktuelle Transaktionsgebühren';$('btcEur').textContent=eur(x.btc_eur);$('priceUpdated').textContent='BTC/EUR Spot · Coinbase · '+(x.updated?new Date(x.updated*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'nicht verfügbar');$('priceChange').textContent=chg==null?'24h —':'24h '+(chg>=0?'+':'')+Number(chg).toFixed(2)+'%';$('priceChange').className='pricechange '+((chg??0)>=0?'up':'down');$('blockEur').textContent=b.miner_eur==null?'—':'≈ '+eur(b.miner_eur);$('blockHeight').textContent=b.height?.toLocaleString('de-DE')||'—';if(p.length)draw('btcPriceChart',[{name:'BTC/EUR',unit:'€',points:p.map(v=>({ts:v.ts,v:v.close})),color:color,width:2.5}],{start:p[0].ts,end:p[p.length-1].ts,range:'24h',decimals:0,unit:'€'});$('minerHash').textContent=rate(m.hashRate);$('minerName').textContent='Worker '+(w.name||'—')+' · '+String(w.payoutMode||'solo').toUpperCase();$('minerBest').textContent=diff(m.bestDifficulty);$('minerWorkers').textContent=m.workersCount??'—';$('minerWork').textContent=diff(m.soloWork);$('minerSeen').textContent=m.lastSeen?new Date(m.lastSeen).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}):'—'}
 const chartState={};function axisLabel(ts,range){let d=new Date(ts*1000);return range==='7d'?d.toLocaleDateString('de-DE',{weekday:'short',day:'2-digit',month:'2-digit'}):d.toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'})}
 function draw(id,series,opt={}){let c=$(id),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,d=devicePixelRatio,left=46,right=10,top=10,bottom=25,span=Math.max(1,opt.end-opt.start);c.width=w*d;c.height=h*d;ctx.scale(d,d);ctx.clearRect(0,0,w,h);let vals=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>p.v));if(!vals.length){ctx.fillStyle='#8390a3';ctx.fillText('Noch keine Verlaufsdaten',left,26);return}let min=opt.min??Math.min(...vals),max=opt.max??Math.max(...vals);if(min===max){min-=1;max+=1}let px=t=>left+(t-opt.start)*(w-left-right)/span,py=v=>top+(max-v)*(h-top-bottom)/(max-min);ctx.font='11px system-ui';ctx.strokeStyle='#263447';ctx.fillStyle='#8390a3';for(let i=0;i<3;i++){let y=top+i*(h-top-bottom)/2,v=max-i*(max-min)/2;ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillText(v.toFixed(opt.decimals??0)+(opt.unit||''),2,y+4)}let ticks=opt.range==='1h'?6:(opt.range==='24h'?6:7);for(let i=0;i<=ticks;i++){let t=opt.start+span*i/ticks,x=px(t),label=axisLabel(t,opt.range);ctx.fillText(label,Math.max(left,Math.min(w-right-54,x-22)),h-5)}(opt.markers||[]).filter(m=>m.planned&&m.ended_at).forEach(m=>{ctx.fillStyle='#57a6ff22';ctx.fillRect(px(Math.max(opt.start,m.ts)),top,Math.max(2,px(Math.min(opt.end,m.ended_at))-px(Math.max(opt.start,m.ts))),h-top-bottom)});(opt.markers||[]).forEach(m=>{let x=px(m.ts);ctx.strokeStyle=m.planned?'#57a6ff':(m.automatic?'#ffc857':'#ff5964');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(x-4,top);ctx.lineTo(x+4,top);ctx.lineTo(x,top+7);ctx.fill()});series.forEach(s=>{ctx.strokeStyle=s.color;ctx.lineWidth=s.width||2;ctx.setLineDash(s.dash||[]);ctx.beginPath();let started=false;s.points.forEach(p=>{if(p.v==null||p.gap){started=false;return}let x=px(p.ts),y=py(p.v);started?ctx.lineTo(x,y):(ctx.moveTo(x,y),started=true)});ctx.stroke()});ctx.setLineDash([]);chartState[id]={series,opt,left,right,top,bottom,w,h,px,py};c.onmousemove=e=>{let state=chartState[id],rect=c.getBoundingClientRect(),mx=e.clientX-rect.left,t=opt.start+(mx-left)*span/(w-left-right),points=series.flatMap(s=>s.points.filter(p=>p.v!=null&&!p.gap).map(p=>({...p,name:s.name||'',unit:s.unit||''}))),nearest=points.reduce((a,p)=>!a||Math.abs(p.ts-t)<Math.abs(a.ts-t)?p:a,null),marker=(opt.markers||[]).reduce((a,m)=>!a||Math.abs(m.ts-t)<Math.abs(a.ts-t)?m:a,null);c.title=marker&&Math.abs(px(marker.ts)-mx)<7?new Date(marker.ts*1000).toLocaleString('de-DE')+' · '+marker.kind+' · '+marker.description:nearest?new Date(nearest.ts*1000).toLocaleString('de-DE')+' · '+nearest.name+': '+Number(nearest.v).toFixed(2)+' '+nearest.unit:''}}
-async function incidentDetail(id){
- let r=await fetch('/api/incidents/'+id),i=await r.json(),f=i.facts||{},fx=i.forensics||{},d=(i.diagnostics||[]).at(-1),o=d?.observed||i.before_sample||{},asic=o.hashrateMonitor?.asics?.[0]||{},domains=asic.domains||[],err=asic.errorCount??fx.error_count,delta=fx.error_count_delta,s=i.samples||[],w=i.window||{start:i.started_at-300,end:(i.ended_at||Date.now()/1000)+300};
+async function incidentDetail(id,url){
+ let r=await fetch(url||'/api/incidents/'+id),i=await r.json(),f=i.facts||{},fx=i.forensics||{},d=(i.diagnostics||[]).at(-1),o=d?.observed||i.before_sample||{},asic=o.hashrateMonitor?.asics?.[0]||{},domains=asic.domains||[],err=asic.errorCount??fx.error_count,delta=fx.error_count_delta,s=i.samples||[],w=i.window||{start:i.started_at-300,end:(i.ended_at||Date.now()/1000)+300};
  let showV=v=>v==null?'—':fmt(v/1000,2)+' V',asicParts=[];if(o.actualFrequency!=null)asicParts.push(fmt(o.actualFrequency,0)+' MHz');if(o.coreVoltage!=null)asicParts.push(fmt(o.coreVoltage,0)+' mV konfiguriert');if(o.coreVoltageActual!=null)asicParts.push(showV(o.coreVoltageActual)+' gemessen');
  let boxes=[['Beginn',new Date(i.started_at*1000).toLocaleString('de-DE')],['Dauer',dur((i.ended_at||Date.now()/1000)-i.started_at)],['Vor Neustart',o.hashRate==null?null:fmt(o.hashRate/1000,2)+' TH/s'+(o.power==null?'':' · '+fmt(o.power,1)+' W')+(o.voltage==null?'':' · '+showV(o.voltage))],['Temperatur',o.temp==null?null:'ASIC '+fmt(o.temp,1)+' °C'+(o.vrTemp==null?'':' · VR '+fmt(o.vrTemp,1)+' °C')],['Domains (AxeOS Raw)',domains.length?domains.map(v=>fmt(v,2)).join(' / ')+' GH/s':null],['ASIC',asicParts.length?asicParts.join(' · '):null],['Error Count',err==null?null:Number(err).toLocaleString('de-DE')+(delta==null?'':' · Δ +'+Number(delta).toLocaleString('de-DE'))],['Input Voltage',fx.voltage_incident==null?null:'Incident '+showV(fx.voltage_incident)+' · 60s Min '+showV(fx.voltage_min_60s)+' · 5m Min '+showV(fx.voltage_min_5m)],['Diagnosequelle',d?.source_status||null],['Recovery',i.recovery||null]].filter(v=>v[1]!=null);
  $('incidentDetail').innerHTML='<h2>'+escapeText(i.kind)+'</h2><p>'+escapeText(i.summary)+'</p><div class="detailgrid">'+boxes.map(v=>'<div class="detailbox"><span class="sub">'+v[0]+'</span><br><b>'+escapeText(v[1])+'</b></div>').join('')+'</div><div class="incidentcharts"><div class="incidentchart"><div class="label">Hashrate & Domains</div><canvas id="incidentHash"></canvas></div><div class="incidentchart"><div class="label">Input Voltage</div><canvas id="incidentVoltage"></canvas></div><div class="incidentchart"><div class="label">Power & Temperaturen</div><canvas id="incidentThermal"></canvas></div><div class="incidentchart"><div class="label">Error Count</div><canvas id="incidentErrors"></canvas></div></div><h3>Einordnung</h3><p>Messwerte sind beobachtet. Domain-Werte und Error Count werden unverändert aus AxeOS übernommen. Der Error Count enthält keine Information über die konkrete Fehlerart; ein Counter-Reset wird nicht als negatives Delta dargestellt.</p>';
@@ -790,6 +798,43 @@ def get_sample_window(start, end):
         rows = con.execute("SELECT ts,payload FROM samples WHERE ts BETWEEN ? AND ? ORDER BY ts",
                            (start, end)).fetchall()
     return [safe_payload(json.loads(r["payload"])) | {"ts": r["ts"]} for r in rows]
+
+
+def timeline_detail_url(source, kind, item_id):
+    if source == "incident":
+        return f"/api/incidents/{item_id}"
+    if source == "event" and kind in DIAGNOSTIC_EVENT_KINDS:
+        return f"/api/events/{item_id}"
+    return None
+
+
+def event_detail_payload(event_id):
+    """Build a read-only incident-style view around an existing diagnostic event."""
+    with db() as con:
+        event = con.execute("SELECT * FROM events WHERE id=?", (event_id,)).fetchone()
+        if not event or event["kind"] not in DIAGNOSTIC_EVENT_KINDS:
+            return None
+        stamp = int(event["ts"])
+        window = incident_window(stamp, stamp)
+        telemetry = con.execute("SELECT ts,payload FROM samples WHERE ts BETWEEN ? AND ? ORDER BY ts",
+                                (window["start"], window["end"])).fetchall()
+        before = con.execute("SELECT ts,payload FROM samples WHERE ts<=? ORDER BY ts DESC LIMIT 1",
+                             (stamp,)).fetchone()
+        related = con.execute("""SELECT ts,kind,severity,message,automatic,details FROM events
+            WHERE ts BETWEEN ? AND ? ORDER BY ts,id""", (window["start"], window["end"])).fetchall()
+    before_sample = ({"ts": before["ts"], **safe_payload(json.loads(before["payload"]))}
+                     if before else None)
+    _, pre_stats = pre_crash_snapshot(stamp)
+    facts = json.loads(event["details"] or "{}")
+    samples = [{"ts": row["ts"], **safe_payload(json.loads(row["payload"]))} for row in telemetry]
+    return {"id": event["id"], "started_at": stamp, "ended_at": stamp,
+            "status": "OBSERVED", "kind": event["kind"], "severity": event["severity"],
+            "title": event["kind"].replace("_", " "), "summary": event["message"],
+            "facts": facts, "before_sample": before_sample, "after_sample": None,
+            "pre_stats": pre_stats, "recovery": None, "diagnostics": [],
+            "forensics": incident_metrics(stamp, before_sample), "samples": samples,
+            "window": window,
+            "events": [{**dict(row), "details": json.loads(row["details"] or "{}")} for row in related]}
 
 
 def chart_history(start, end, bucket):
@@ -2316,7 +2361,12 @@ class Handler(BaseHTTPRequestHandler):
                 rows = con.execute('''SELECT id,started_at ts,kind,severity,title message,'incident' source
                     FROM incidents UNION ALL SELECT id,ts,kind,severity,message,'event' source
                     FROM events WHERE incident_id IS NULL ORDER BY ts DESC LIMIT 200''').fetchall()
-            return self.send_json([dict(row) for row in rows])
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["detail_url"] = timeline_detail_url(item["source"], item["kind"], item["id"])
+                result.append(item)
+            return self.send_json(result)
         if p.path == '/api/storage':
             with db() as con:
                 pages = con.execute('PRAGMA page_count').fetchone()[0]
@@ -2414,6 +2464,13 @@ class Handler(BaseHTTPRequestHandler):
             with db() as con:
                 rows = con.execute("SELECT ts,kind,severity,message FROM events WHERE kind <> 'HASHRATE' ORDER BY ts DESC LIMIT 100").fetchall()
             return self.send_json([dict(r) for r in rows])
+        if p.path.startswith("/api/events/"):
+            try:
+                event_id = int(p.path.rsplit("/", 1)[1])
+            except ValueError:
+                return self.send_json({"error": "invalid event"}, 400)
+            item = event_detail_payload(event_id)
+            return self.send_json(item) if item else self.send_json({"error": "not found"}, 404)
         if p.path == "/api/incidents":
             with db() as con:
                 rows = con.execute("""SELECT * FROM incidents WHERE kind <> 'USER_PAUSED'
