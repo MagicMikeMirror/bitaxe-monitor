@@ -58,6 +58,15 @@ production charts remain available. `/healthz` reports monitor/database readines
 miner availability is reported separately, so an absent replacement does not mark
 the healthy monitor container as broken.
 
+BM1370 domain stability uses time-weighted averages from the existing stored
+domain samples instead of the spread of one sample. It reports 5- and 15-minute
+relative deviations from the common four-domain mean. The thresholds are monitor
+heuristics, not vendor specifications: WATCH below -12% over 5 minutes or -8%
+over 15 minutes, WARNING below -15% over 15 minutes or for a domain that remains
+near zero for 5 minutes. Less than 75% valid 15-minute coverage is UNKNOWN.
+Configuration changes, pauses, reboot/session boundaries and telemetry gaps are
+excluded rather than joined. The original four-domain chart remains unchanged.
+
 For a source build, run `docker compose build` before recreating the service.
 Locally built images do not imply that a corresponding public registry release
 has been published.
@@ -267,7 +276,7 @@ and [AxeOS display mapping](https://github.com/bitaxeorg/ESP-Miner/blob/v2.15.1/
 
 ## Updating
 
-Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.6.1` from source or
+Back up `/DATA/AppData/bitaxe-monitor/data`, build version `1.7.0` from source or
 use its published image when available, and recreate the container. The sample
 table and existing history remain unchanged; schema version 5 only adds the
 aggregate table. Startup creates verified pre-migration backups and does not bind

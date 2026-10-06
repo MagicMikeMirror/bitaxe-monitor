@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import app
 from device_history import Catalog, backup, connection
-from telemetry import summarize
+from telemetry import summarize, domain_stability
 
 
 class GenerationTests(unittest.TestCase):
@@ -137,6 +137,38 @@ class GenerationTests(unittest.TestCase):
         self.assertTrue(result['counter_interrupted'])
         self.assertIsNone(result['reject_pct'])
         self.assertAlmostEqual(result['efficiency_jth'],20)
+
+    @staticmethod
+    def domain_samples(value_at):
+        return [{'ts': stamp, 'uptimeSeconds': stamp + 1000, 'hashRate': 1000,
+                 'expectedHashrate': 1000, 'errorPercentage': 0.1,
+                 'frequency': 525, 'coreVoltage': 1150, 'autofanspeed': 0,
+                 'manualFanSpeed': 100, 'temptarget': 65,
+                 'hashrateMonitor': {'asics': [{'domains': value_at(stamp)}]}}
+                for stamp in range(0, 901, 10)]
+
+    def test_domain_stability_passes_balanced_domains_and_single_outlier(self):
+        balanced = domain_stability(self.domain_samples(lambda _: [250, 250, 250, 250]), 900)
+        self.assertEqual(balanced['status'], 'PASS')
+        self.assertEqual((balanced['active_domains'], balanced['stable_domains']), (4, 4))
+        outlier = domain_stability(self.domain_samples(
+            lambda stamp: [250, 250, 250, 0 if stamp == 700 else 250]), 900)
+        self.assertEqual(outlier['status'], 'PASS')
+
+    def test_domain_stability_watches_short_weakness_and_warns_persistent_weakness(self):
+        short = domain_stability(self.domain_samples(
+            lambda stamp: [250, 250, 250, 150 if stamp >= 600 else 250]), 900)
+        self.assertEqual(short['status'], 'WATCH')
+        self.assertEqual(short['windows']['15m']['weakest_domain'], 3)
+        persistent = domain_stability(self.domain_samples(lambda _: [250, 250, 250, 150]), 900)
+        self.assertEqual(persistent['status'], 'WARNING')
+
+    def test_domain_stability_warns_dead_domain_and_unknown_incomplete_data(self):
+        dead = domain_stability(self.domain_samples(lambda _: [250, 250, 250, 0]), 900)
+        self.assertEqual(dead['status'], 'WARNING')
+        self.assertEqual(dead['active_domains'], 3)
+        incomplete = domain_stability(self.domain_samples(lambda _: [250, 250, 250]), 900)
+        self.assertEqual(incomplete['status'], 'UNKNOWN')
 
     def test_missing_identity_blocks_switch(self):
         catalog = self.catalog()

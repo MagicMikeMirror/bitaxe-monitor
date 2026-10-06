@@ -194,9 +194,12 @@ incidentDetail=async id=>{
 
 events = async () => {
   const x = await json('/api/diagnostics'); lastDiagnostics=x;
-  const w=x.windows['5m'], values=x.samples||[];
+  const w=x.windows['5m'], values=x.samples||[], stability=x.domain_stability||{}, d5=stability.windows?.['5m']||{}, d15=stability.windows?.['15m']||{};
   facts.replaceChildren();
-  for (const [label,value] of [['Domains',`${w.active_domains}/${w.domain_count} aktiv · ${w.known_domains} bekannt`],['Asymmetrie',unit(w.domain_imbalance_pct,'%',1)],['ErrorCount Δ / 5m',w.error_delta==null?'—':fmt(w.error_delta,0)+(w.counter_interrupted?' · Teilintervalle':'')],['Reject / 5m',unit(w.reject_pct,'%',2)],['Effizienz / 5m',unit(w.efficiency_jth,'J/TH')],['Unterspannung / 5m',dur(w.voltage_low_seconds)],['Mining / Pause',dur(w.mining_seconds)+' / '+dur(w.pause_seconds)],['Datenabdeckung',dur(w.coverage_seconds)+' / 5m'],...['1m','5m','15m'].map(p=>['ASIC-Fehler / '+p,unit(x.windows[p].error_pct,'%',2)])]) {
+  const weakest=d15.weakest_domain==null?'—':`D${d15.weakest_domain} (${fmt(d15.weakest_deviation_pct,1)} % / 15m)`;
+  const domainCount=stability.active_domains==null?'—':`${stability.stable_domains}/${stability.domain_count} stabil · ${stability.active_domains}/${stability.domain_count} aktiv`;
+  const context=`Soll/Ist ${unit(stability.actual_expected_pct,'%',1)} · ASIC-Fehler ${unit(stability.asic_error_pct,'%',2)} · Reboots/15m ${stability.recent_reboots??'—'}`;
+  for (const [label,value] of [['Domain-Stabilität',stability.status||'UNKNOWN'],['Domains',domainCount],['Größte dauerhafte Abweichung',`5m ${unit(d5.max_downward_pct,'%',1)} · 15m ${unit(d15.max_downward_pct,'%',1)}`],['Schwächste Domain',weakest],['Kontext',context],['ErrorCount Δ / 5m',w.error_delta==null?'—':fmt(w.error_delta,0)+(w.counter_interrupted?' · Teilintervalle':'')],['Reject / 5m',unit(w.reject_pct,'%',2)],['Effizienz / 5m',unit(w.efficiency_jth,'J/TH')],['Unterspannung / 5m',dur(w.voltage_low_seconds)],['Mining / Pause',dur(w.mining_seconds)+' / '+dur(w.pause_seconds)],['Datenabdeckung',dur(w.coverage_seconds)+' / 5m'],...['1m','5m','15m'].map(p=>['ASIC-Fehler / '+p,unit(x.windows[p].error_pct,'%',2)])]) {
     const span=element('span',label+': ',facts);element('b',value,span);
   }
   const pts=fn=>values.map((v,index)=>({ts:v.ts,v:fn(v),gap:index>0 && (v.ts-values[index-1].ts>x.poll_seconds*3||v.counterEpoch!==values[index-1].counterEpoch)}));

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.0
+
+- Replace the single-sample BM1370 domain imbalance with time-weighted 5/15-minute domain stability, conservative PASS/WATCH/WARNING/UNKNOWN assessment and weakest-domain context while retaining the existing chart.
+
 ## 1.6.1
 
 - Idempotently link legacy uptime-confirmed `REBOOT` events to reconstructed `DEVICE_REBOOT` incidents so existing active-generation reboot history appears in the new statistics without changing telemetry.

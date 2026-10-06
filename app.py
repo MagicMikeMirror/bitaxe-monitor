@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from device_history import Catalog, backup, connection
-from telemetry import number, configuration, continuous, counter_delta, domains, summarize
+from telemetry import number, configuration, continuous, counter_delta, domains, summarize, domain_stability
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse, urlunparse
@@ -1135,9 +1135,15 @@ def diagnostic_history(at=None):
     end = int(at or now())
     end = min(end, int(state_value('generation_ended_at', end)))
     samples = telemetry_samples(end - 900 - POLL_SECONDS * 3, end)
+    windows = {label: summarize(samples, end, seconds, POLL_SECONDS * 3, VOLTAGE_LOW_V * 1000)
+               for label, seconds in (('1m', 60), ('5m', 300), ('15m', 900))}
+    stability = domain_stability(samples, end, POLL_SECONDS * 3)
+    with db() as con:
+        stability['recent_reboots'] = con.execute(
+            "SELECT COUNT(*) FROM incidents WHERE kind='DEVICE_REBOOT' AND started_at>=?",
+            (end - 900,)).fetchone()[0]
     return {'asic': json.loads(state_value('asic_metadata', '{}')), 'poll_seconds': POLL_SECONDS,
-            'windows': {label: summarize(samples, end, seconds, POLL_SECONDS * 3, VOLTAGE_LOW_V * 1000)
-                        for label, seconds in (('1m', 60), ('5m', 300), ('15m', 900))},
+            'windows': windows, 'domain_stability': stability,
             'samples': samples, 'start': end - 900, 'end': end}
 
 
